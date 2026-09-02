@@ -2,11 +2,11 @@ from django.db import models
 
 
 class Listing(models.Model):
-    # Source identifier — the auction ID from izsoles.csv
-    source_id = models.IntegerField(unique=True)
+    # Source identifier — UUID from izsoles.csv (field name: id)
+    source_id = models.UUIDField(unique=True)
 
     title = models.CharField(max_length=500)
-    initiated_by = models.CharField(max_length=10)   # "ZTI" or "MPA"
+    initiated_by = models.CharField(max_length=20)  # "ZTI", "MPA", or "LegalPerson"
     bailiff = models.CharField(max_length=255, blank=True)
     start_time = models.DateTimeField()
     end_time = models.DateTimeField()
@@ -23,8 +23,10 @@ class Listing(models.Model):
     bid_step = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
     last_bid = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
 
-    stage = models.PositiveSmallIntegerField(null=True, blank=True)
+    # -1 is a valid stage value in the live data
+    stage = models.SmallIntegerField(null=True, blank=True)
     type = models.CharField(max_length=100, blank=True)
+    ownership_type = models.CharField(max_length=20, blank=True)  # "owner" or "rent"
 
     # SHA-256 hash of the raw CSV row — used to detect changes on re-import
     raw_hash = models.CharField(max_length=64, db_index=True)

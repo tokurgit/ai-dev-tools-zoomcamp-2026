@@ -1,0 +1,6 @@
+title,id,initiated_by,bailiff,start_time,end_time,state,region_id,category_id,office_id,area,valuation,start_price,bid_step,last_bid,stage,type,ownership_type,usage_goal
+"Maltas iela 21 - 74, Rīga",1e548c7f-eba4-45f4-88c2-8742f1858d87,ZTI,Jānis Stepanovs,2015-07-07 10:00:00,2015-08-06 10:05:00,apstiprināta,7,3,58,53.42,19100,19100,1000,25100,1,Nekustamie īpašumi,owner,
+"Vaiņodes iela 19, Rīga",2411af8f-b682-40f5-bb2a-896fef94c77f,ZTI,Ginters Hmeļevskis,2015-07-07 10:00:00,2015-08-06 10:00:00,apstiprināta,7,2,84,659,91100,91100,2000,129100,1,Nekustamie īpašumi,owner,
+" Salenieki 102A, Salaspils pagasts, Salaspils novads",31de7869-c74b-4f0c-b196-e25a3ff8a7ea,ZTI,Jānis Lazdāns,2015-07-07 10:00:00,2015-08-06 10:00:00,apstiprināta,96,1,59,1796,1400,1400,100,0,1,Nekustamie īpašumi,owner,
+"Rusova iela 32 - 12, Rīga",33785fb4-616b-4bf2-854e-46a0a3455338,ZTI,Jānis Stepanovs,2015-07-07 10:00:00,2015-08-06 10:09:14,apstiprināta,7,3,58,38.87,13600,13600,500,15600,1,Nekustamie īpašumi,owner,
+" Sulas, Jumpravas novads, Lielvārdes novads",44451c43-4ecb-47bd-b5e3-6a471a12175e,ZTI,Jānis Lazdāns,2015-07-07 10:00:00,2015-08-06 10:00:00,apstiprināta,62,1,59,10000,7,7,0.5,1200,1,Nekustamie īpašumi,owner,
