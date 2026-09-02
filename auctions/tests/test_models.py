@@ -5,7 +5,7 @@ from django.apps import apps
 from django.db import IntegrityError
 from django.utils import timezone
 
-from .models import Listing
+from auctions.models import Listing
 
 
 class SmokeTest(SimpleTestCase):
