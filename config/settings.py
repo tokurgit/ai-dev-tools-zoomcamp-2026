@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
+import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -128,3 +129,20 @@ MAILERS = {
         'BACKEND': 'django.core.mail.backends.console.EmailBackend',
     },
 }
+
+
+# izsoles.csv ingest (issue #4)
+# ----------------------------
+# An operator drops the daily ``izsoles.csv`` at IZSOLES_CSV_PATH; the parser
+# (auctions.ingest.parse) reads it from there. The httpx fetcher
+# (auctions.ingest.fetch) is a best-effort secondary path that refreshes that
+# same local file from the open-data URL.
+IZSOLES_CSV_PATH = os.environ.get(
+    'IZSOLES_CSV_PATH', str(BASE_DIR / 'data' / 'izsoles.csv')
+)
+IZSOLES_OPEN_DATA_URL = os.environ.get(
+    'IZSOLES_OPEN_DATA_URL', 'https://izsoles.ta.gov.lv/open_data/izsoles.csv'
+)
+# Optional ``Cookie:`` header value for the fetch (live session cookies from a
+# logged-in browser); the open-data endpoint 403s without them.
+IZSOLES_FETCH_COOKIE = os.environ.get('IZSOLES_FETCH_COOKIE', '')
