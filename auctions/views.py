@@ -1,3 +1,1 @@
-from django.shortcuts import render
-
-# Create your views here.
+# No views yet — the project is a data pipeline; UI views arrive with issues #11–#14.

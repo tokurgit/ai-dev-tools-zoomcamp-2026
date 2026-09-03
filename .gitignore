@@ -10,6 +10,11 @@ __pycache__/
 db.sqlite3
 *.log
 
+# Coverage
+.coverage
+coverage.xml
+htmlcov/
+
 # uv
 .python-version
 

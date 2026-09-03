@@ -58,3 +58,7 @@ class ListingModelTest(TestCase):
     def test_negative_stage_is_valid(self):
         listing = self._make_listing(source_id=self.UUID_2, stage=-1)
         self.assertEqual(Listing.objects.get(pk=listing.pk).stage, -1)
+
+    def test_str_includes_source_id_and_title(self):
+        listing = Listing(source_id=self.UUID_1, title="Dzīvoklis Rīgā")
+        self.assertEqual(str(listing), f"{self.UUID_1}: Dzīvoklis Rīgā")

@@ -51,6 +51,18 @@ class ParseReferenceCsvTest(SimpleTestCase):
         with self.assertLogs("auctions.reference_data", level="WARNING"):
             self.assertEqual(list(parse_reference_csv(io.StringIO(""))), [])
 
+    def test_unexpected_header_is_warned_but_rows_still_parse(self):
+        stream = io.StringIO("code,label\n1,Rīga\n")
+        with self.assertLogs("auctions.reference_data", level="WARNING") as cm:
+            rows = list(parse_reference_csv(stream))
+        self.assertEqual(rows, [ReferenceRow(1, "Rīga")])
+        self.assertIn("unexpected reference CSV header", cm.output[0])
+
+    def test_reference_row_repr(self):
+        self.assertEqual(
+            repr(ReferenceRow(1, "Rīga")), "ReferenceRow(id=1, name='Rīga')"
+        )
+
 
 class LoadReferenceDataCommandTest(TestCase):
     def _load(self, *args, **overrides):
