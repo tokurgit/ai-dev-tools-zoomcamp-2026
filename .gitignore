@@ -15,3 +15,6 @@ db.sqlite3
 
 # Environment
 .env
+
+# Operator-supplied reference data (see data/README.md)
+data/*.csv

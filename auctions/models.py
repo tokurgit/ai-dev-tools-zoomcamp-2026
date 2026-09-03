@@ -1,6 +1,33 @@
 from django.db import models
 
 
+class Category(models.Model):
+    """Auction category lookup — mirrors ``kategorija.csv`` from the open-data feed."""
+
+    id = models.IntegerField(primary_key=True)  # the CSV `id`
+    name = models.CharField(max_length=255)
+
+    class Meta:
+        verbose_name_plural = "categories"
+        ordering = ["id"]
+
+    def __str__(self):
+        return self.name
+
+
+class Region(models.Model):
+    """Region lookup — mirrors ``region.csv`` from the open-data feed."""
+
+    id = models.IntegerField(primary_key=True)  # the CSV `id`
+    name = models.CharField(max_length=255)
+
+    class Meta:
+        ordering = ["id"]
+
+    def __str__(self):
+        return self.name
+
+
 class Listing(models.Model):
     # Source identifier — UUID from izsoles.csv (field name: id)
     source_id = models.UUIDField(unique=True)
