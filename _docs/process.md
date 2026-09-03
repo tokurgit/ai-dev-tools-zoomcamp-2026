@@ -3,9 +3,9 @@
 - Ask if requirements are not clear
 - Provide options with comparison across them
 - Commit regularly
-- Any issue that touches code is checked for new-code coverage before it
-  closes - every line the diff adds or changes must be covered
-  (see `_docs/team/qa-engineer.md`)
+- Any issue that touches code is checked before it closes to confirm total
+  coverage did not drop - `uv run pytest` fails on the `--cov-fail-under`
+  floor if it did (see `_docs/team/qa-engineer.md`)
 
 Roles
 

@@ -4,7 +4,7 @@
 PY := uv run
 MANAGE := $(PY) python manage.py
 
-.PHONY: help install sync test test-file test-k coverage coverage-diff check run \
+.PHONY: help install sync test test-file test-k coverage check run \
         shell migrate migrations superuser load-reference-data lint-migrations clean
 
 help: ## Show this help
@@ -25,12 +25,6 @@ test-k: ## Run tests matching a name expression: make test-k K=test_source_id_is
 
 coverage: ## Run the suite with coverage (term-missing + HTML + coverage.xml)
 	$(PY) pytest --cov-report=term-missing --cov-report=html --cov-report=xml
-
-coverage-diff: ## New-code check: coverage table + the diff vs BASE (default origin/main) side by side
-	$(PY) pytest --cov-report=term-missing -q
-	@echo
-	@echo "--- lines added/changed vs $(or $(BASE),origin/main) — none may appear in a Missing column above ---"
-	@git diff --unified=0 $(or $(BASE),origin/main) -- '*.py'
 
 check: ## Run Django system checks
 	$(MANAGE) check
