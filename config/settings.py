@@ -203,6 +203,10 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.1/howto/static-files/
 
 STATIC_URL = 'static/'
+# Required for `collectstatic` (used by deploy/deploy.sh, #16) — Nginx's
+# `templates/nginx.conf` serves `/static/` as `alias $APP_DIR/staticfiles/`,
+# i.e. exactly this path when APP_DIR is the deploy checkout root.
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 
 # Notification email dispatch (issue #9)
