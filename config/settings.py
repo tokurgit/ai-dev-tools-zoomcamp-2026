@@ -182,3 +182,29 @@ IZSOLES_OPEN_DATA_URL = os.environ.get(
 # Optional ``Cookie:`` header value for the fetch (live session cookies from a
 # logged-in browser); the open-data endpoint 403s without them.
 IZSOLES_FETCH_COOKIE = os.environ.get('IZSOLES_FETCH_COOKIE', '')
+
+
+# Logging (issue #10)
+# --------------------
+# Nothing configured logging before this. Django's own default only attaches
+# handlers under the "django" logger tree (request/server/security), so an
+# INFO-level ``logging.getLogger(__name__)`` call from a management command
+# (e.g. ``run_daily_import``) had no handler to reach and was silently
+# dropped when run standalone (as cron would run it). This adds one console
+# handler at INFO on the root logger — minimal, and additive: it doesn't
+# touch Django's own logger configuration (``disable_existing_loggers`` stays
+# ``False``), it just gives every other logger in the project a place to go.
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'level': 'INFO',
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': 'INFO',
+    },
+}
