@@ -32,3 +32,17 @@ class RecordingBackend:
         if to in self.fail_for:
             raise RuntimeError(f"provider rejected {to}")
         self.messages.append(SentMessage(to=to, subject=subject, body=body))
+
+
+class AlwaysFailingBackend:
+    """A backend whose ``send`` always raises.
+
+    ``RecordingBackend.fail_for`` needs an address to target, but some tests
+    (the #15 admin resend action) resolve their backend via
+    ``NOTIFICATION_BACKEND`` — a dotted path Django instantiates with no
+    arguments — so there is no seam to pass ``fail_for`` through. This gives
+    those tests an unconditional failure.
+    """
+
+    def send(self, to, subject, body):
+        raise RuntimeError("provider unavailable")

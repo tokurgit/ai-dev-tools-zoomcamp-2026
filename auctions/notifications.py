@@ -180,7 +180,7 @@ def _finish_batch(rows, status, *, sent_at=None, error=""):
 DISPATCHABLE_STATUSES = (Notification.Status.PENDING, Notification.Status.FAILED)
 
 
-def dispatch_pending(backend=None):
+def dispatch_pending(backend=None, queryset=None):
     """Send pending/failed notifications as email; return a :class:`DispatchResult`.
 
     Selects rows whose ``status`` is in :data:`DISPATCHABLE_STATUSES`
@@ -189,6 +189,14 @@ def dispatch_pending(backend=None):
     :func:`batch_notifications`, and sends one email per batch through
     *backend* (defaults to :func:`auctions.email.get_backend`, resolved up front
     so a bad ``NOTIFICATION_BACKEND`` fails before any row is touched).
+
+    *queryset*, when given, scopes the run to that subset of rows (still
+    filtered down to :data:`DISPATCHABLE_STATUSES` — passing a queryset that
+    includes ``sent`` rows just means those are ignored) instead of every
+    dispatchable row in the table. This is the seam the admin's "Resend
+    selected" action (#15) uses to re-send a chosen set of ``failed`` rows
+    without touching the rest of the pending queue. ``None`` (the default)
+    keeps today's behaviour: every pending/failed row.
 
     On a successful ``send()`` every row in that batch becomes ``sent`` with
     ``sent_at`` set and ``error`` cleared. On failure the batch's rows become
@@ -202,9 +210,11 @@ def dispatch_pending(backend=None):
     """
     if backend is None:
         backend = get_backend()
+    if queryset is None:
+        queryset = Notification.objects.all()
 
     pending = list(
-        Notification.objects.filter(status__in=DISPATCHABLE_STATUSES)
+        queryset.filter(status__in=DISPATCHABLE_STATUSES)
         .select_related("user", "filter_profile", "listing")
         .order_by("pk")
     )

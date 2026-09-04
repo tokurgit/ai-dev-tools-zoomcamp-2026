@@ -378,6 +378,44 @@ class DispatchPendingTest(TestCase):
         self.assertEqual(row.error, "")
         self.assertIsNotNone(row.sent_at)
 
+    def test_queryset_param_scopes_dispatch_to_only_those_rows(self):
+        scoped = self._pending(self.alice)
+        other = self._pending(self.bob)
+
+        backend = RecordingBackend()
+        result = dispatch_pending(
+            backend, queryset=Notification.objects.filter(pk=scoped.pk)
+        )
+
+        self.assertEqual(result, DispatchResult(emails=1, sent=1, failed=0))
+        scoped.refresh_from_db()
+        other.refresh_from_db()
+        self.assertEqual(scoped.status, "sent")
+        self.assertEqual(other.status, "pending")
+
+    def test_queryset_param_is_still_filtered_to_dispatchable_statuses(self):
+        failed = self._pending(self.alice)
+        failed.status = Notification.Status.FAILED
+        failed.save()
+        already_sent = self._pending(self.alice)
+        already_sent.status = Notification.Status.SENT
+        already_sent.sent_at = timezone.now()
+        already_sent.save()
+
+        backend = RecordingBackend()
+        result = dispatch_pending(
+            backend,
+            queryset=Notification.objects.filter(
+                pk__in=[failed.pk, already_sent.pk]
+            ),
+        )
+
+        # Only the `failed` row was dispatchable; the already-`sent` row was
+        # filtered out internally and not re-sent.
+        self.assertEqual(result, DispatchResult(emails=1, sent=1, failed=0))
+        failed.refresh_from_db()
+        self.assertEqual(failed.status, "sent")
+
     def test_uses_the_configured_backend_when_none_is_passed(self):
         self._pending(self.alice)
         with override_settings(
