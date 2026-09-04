@@ -389,7 +389,7 @@ class DispatchPendingTest(TestCase):
 
     # --- batching seam (#14) ------------------------------------------
 
-    def test_each_immediate_profile_is_its_own_batch_digest_shares_one(self):
+    def test_each_immediate_notification_is_its_own_email_digest_shares_one(self):
         imm1 = self._profile(self.alice, "i1", delivery=FilterProfile.Delivery.IMMEDIATE)
         imm2 = self._profile(self.alice, "i2", delivery=FilterProfile.Delivery.IMMEDIATE)
         dig = self._profile(self.alice, "d", delivery=FilterProfile.Delivery.DIGEST)
@@ -401,9 +401,33 @@ class DispatchPendingTest(TestCase):
         backend = RecordingBackend()
         result = dispatch_pending(backend)
 
-        # imm1 batch + imm2 batch + one shared digest batch = 3 emails.
-        self.assertEqual(len(backend.messages), 3)
-        self.assertEqual(result, DispatchResult(emails=3, sent=4, failed=0))
+        # 3 immediate rows = 3 emails (one per notification), + 1 shared digest.
+        self.assertEqual(len(backend.messages), 4)
+        self.assertEqual(result, DispatchResult(emails=4, sent=4, failed=0))
+
+    def test_digest_profile_with_two_pending_rows_sends_one_email(self):
+        dig = self._profile(self.alice, "d", delivery=FilterProfile.Delivery.DIGEST)
+        self._pending(self.alice, profile=dig)
+        self._pending(self.alice, profile=dig)
+
+        backend = RecordingBackend()
+        result = dispatch_pending(backend)
+
+        self.assertEqual(len(backend.messages), 1)
+        self.assertEqual(result, DispatchResult(emails=1, sent=2, failed=0))
+
+    def test_immediate_profile_with_two_pending_rows_sends_two_emails(self):
+        imm = self._profile(
+            self.alice, "i", delivery=FilterProfile.Delivery.IMMEDIATE
+        )
+        self._pending(self.alice, profile=imm)
+        self._pending(self.alice, profile=imm)
+
+        backend = RecordingBackend()
+        result = dispatch_pending(backend)
+
+        self.assertEqual(len(backend.messages), 2)
+        self.assertEqual(result, DispatchResult(emails=2, sent=2, failed=0))
 
     def test_null_filter_profile_row_is_batched_as_digest_for_that_user(self):
         doomed = self._profile(self.alice, "to-be-deleted")
@@ -421,7 +445,7 @@ class DispatchPendingTest(TestCase):
         self.assertIn("(deleted filter)", backend.messages[0].body)
         self.assertEqual(Notification.objects.filter(status="sent").count(), 2)
 
-    def test_batch_notifications_groups_by_user_then_immediate_profile(self):
+    def test_batch_notifications_folds_digest_per_user_splits_immediate_per_row(self):
         p_a = self._profile(self.alice, "a")
         p_b_imm = self._profile(
             self.bob, "b", delivery=FilterProfile.Delivery.IMMEDIATE
@@ -435,7 +459,11 @@ class DispatchPendingTest(TestCase):
         )
         batches = batch_notifications(rows)
 
-        self.assertEqual([[n.pk for n in b] for b in batches], [[n1.pk], [n2.pk, n3.pk]])
+        # alice's digest row folds into one batch; each of bob's immediate rows
+        # is its own batch.
+        self.assertEqual(
+            [[n.pk for n in b] for b in batches], [[n1.pk], [n2.pk], [n3.pk]]
+        )
 
     def test_no_pending_rows_is_a_no_op(self):
         self.assertEqual(batch_notifications([]), [])

@@ -101,20 +101,19 @@ class DispatchResult:
 def batch_notifications(notifications):
     """Split pending notifications into per-email batches — the #14 seam.
 
-    Grouping, per recipient user:
+    Grouping:
 
     * every row from a ``delivery="digest"`` profile collapses into **one**
-      batch for that user;
+      batch per recipient user;
     * every row whose ``filter_profile`` is ``NULL`` (the profile was deleted,
       #13) is **treated as digest** and joins that same per-user batch — the
       user still owns the row and should still hear about the listing;
-    * every ``delivery="immediate"`` profile gets **its own** batch (one per
-      profile).
+    * every row from a ``delivery="immediate"`` profile becomes **its own**
+      batch — one email per notification (per listing), not per profile. A user
+      with two immediate notifications gets two emails.
 
     Returns a list of lists — each inner list is the rows for one email — in
-    order of first appearance. Every profile is ``digest`` until #14 lands, so
-    today this is exactly one batch per user; #14 only flips the ``immediate``
-    branch, not the shape.
+    order of first appearance.
     """
     batches = {}
     for note in notifications:
@@ -123,9 +122,9 @@ def batch_notifications(notifications):
             profile is not None
             and profile.delivery == FilterProfile.Delivery.IMMEDIATE
         ):
-            key = (note.user_id, profile.pk)
+            key = ("immediate", note.pk)
         else:
-            key = (note.user_id, None)
+            key = ("digest", note.user_id)
         batches.setdefault(key, []).append(note)
     return list(batches.values())
 
