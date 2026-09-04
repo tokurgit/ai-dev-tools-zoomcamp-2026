@@ -3,20 +3,27 @@
 # instead and re-run bootstrap.sh (then `systemctl daemon-reload`).
 #
 # Rendered with:
-#   envsubst '${APP_NAME}' \
+#   envsubst '${APP_NAME} ${IMPORT_SCHEDULE}' \
 #     < daily-import.timer > /etc/systemd/system/${APP_NAME}-daily-import.timer
 #
-# Placeholder schedule (03:00 UTC daily, +/- 5 minutes) per issue #16;
-# bootstrap.sh installs but does not enable/start this timer — #17 owns
-# picking the real schedule and is expected to adjust [Timer] as needed,
-# then explicitly `systemctl enable --now ${APP_NAME}-daily-import.timer`.
+# ${IMPORT_SCHEDULE} is app.env's IMPORT_SCHEDULE (default "07:00", HH:MM),
+# substituted straight into OnCalendar= below. The trailing "Europe/Riga"
+# is a literal, not a variable — systemd's OnCalendar= accepts an explicit
+# timezone suffix (systemd >= 243; Ubuntu 24.04 ships 255) so the schedule
+# stays correct across DST without any Environment=TZ= juggling.
+#
+# OnCalendar (not OnUnitActiveSec) + the service being Type=oneshot means
+# runs cannot stack: if a run is still active when the timer next fires,
+# systemd just leaves it running — the overdue trigger is not queued, so a
+# run that somehow took >24h would simply push the next one out, never
+# overlap it. bootstrap.sh (#16) `enable --now`s this timer.
 
 [Unit]
 Description=Timer for ${APP_NAME} daily izsoles.csv import
 
 [Timer]
 Unit=${APP_NAME}-daily-import.service
-OnCalendar=*-*-* 03:00:00
+OnCalendar=*-*-* ${IMPORT_SCHEDULE}:00 Europe/Riga
 RandomizedDelaySec=300
 Persistent=true
 

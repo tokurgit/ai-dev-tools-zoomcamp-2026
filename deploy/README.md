@@ -50,6 +50,17 @@ deploy/
 5. Verify: `./smoke.sh $DOMAIN` (or just re-run `deploy.sh`, which runs it for
    you), `systemctl status <APP_NAME>` and `systemctl status nginx`, and load
    `https://$DOMAIN/admin/` in a browser.
+6. **Trigger the daily import once by hand** to confirm it actually works
+   before waiting for the schedule (issue #17):
+   ```bash
+   sudo systemctl start <APP_NAME>-daily-import.service
+   journalctl -u <APP_NAME>-daily-import -n 50
+   ```
+   A healthy run shows the pipeline summary lines from #10 (rows parsed,
+   listings created/updated, notifications queued, emails sent) and the unit
+   ends `inactive (dead)` with result `success`
+   (`systemctl status <APP_NAME>-daily-import.service`). `systemctl
+   list-timers` shows the timer's next scheduled fire.
 
 Test with a **staging** certificate first if you're unsure DNS/Nginx is right
 — set `CERTBOT_STAGING=true` in `app.env` before the first `bootstrap.sh` run
@@ -73,6 +84,50 @@ everything else checks out.
   restart — `Restart=on-failure` in `gunicorn.service` keeps retrying the
   process that's there. To actually roll back: set `GIT_REF` in `app.env`
   back to the previous tag/SHA and re-run `deploy.sh`.
+
+## The daily import (issue #17)
+
+`bootstrap.sh` installs and `enable --now`s `<APP_NAME>-daily-import.timer`,
+which fires `<APP_NAME>-daily-import.service` (`Type=oneshot`, running
+`run_daily_import`, #10) once a day at `IMPORT_SCHEDULE` (default `07:00`,
+Europe/Riga — the timer's `OnCalendar=` carries an explicit `Europe/Riga`
+suffix, so this stays correct across DST with no `TZ=` juggling needed).
+
+- **Logs.** stdout/stderr go to journald under the unit — no logfile, no
+  logrotate config.
+  ```bash
+  journalctl -u <APP_NAME>-daily-import -n 100        # last 100 lines
+  journalctl -u <APP_NAME>-daily-import --since today  # today's runs
+  ```
+- **Retention.** journald's own defaults already cap total log size (see
+  `journalctl --disk-usage`; tune with `SystemMaxUse=` in
+  `/etc/systemd/journald.conf` if you ever need to). No project-specific
+  logrotate setup is needed.
+- **Overlap.** The timer uses `OnCalendar` (not `OnUnitActiveSec`) and the
+  service is `Type=oneshot`, so systemd never stacks two runs: if a run is
+  somehow still active when the timer next fires, that trigger is simply not
+  queued — the next run just happens whenever the timer fires *after* the
+  current one finishes, potentially skipping that day's slot rather than
+  running concurrently.
+- **Failure surfacing.** `run_daily_import` (#10) exits non-zero on a fatal
+  pipeline error or any failed email, so a bad run shows up as `systemctl
+  status <APP_NAME>-daily-import.service` -> `failed`, with the exit code and
+  full output in the journal. There's no push alert on failure — an
+  `OnFailure=` hook is documented as an extension point in
+  `templates/daily-import.service` but not built; wire one up (email,
+  Telegram, Healthchecks.io, …) if silent failures become a problem.
+- **Manual trigger.** `sudo systemctl start <APP_NAME>-daily-import.service`
+  runs it on demand, any time — same command as the first-deploy check above.
+- **`izsoles.csv` on the VPS.** By default (`IMPORT_FETCH=false`) the command
+  only reads the local file at `IZSOLES_CSV_PATH` — an operator (or a
+  separate process) is responsible for putting it there. Setting
+  `IMPORT_FETCH=true` adds `--fetch`, which tries #4's `httpx` fetcher first;
+  the open-data feed is known to 403 plain clients (see #4's grooming notes)
+  and **whether it works from a given VPS's IP was never verified against a
+  real box in this session** — test it (`IMPORT_FETCH=true`, re-run
+  `bootstrap.sh`, trigger a manual run, check the log) before relying on it,
+  and fall back to `IMPORT_FETCH=false` + an operator dropping the file if it
+  still 403s.
 
 ## Nginx and certbot
 
@@ -117,8 +172,5 @@ block.
   SHA and re-run `deploy.sh`. There is no automatic rollback-on-smoke-failure
   (see "Idempotency and failure behaviour" above) — a bad release needs a
   human to point `GIT_REF` back and redeploy.
-- **The daily-import timer.** `bootstrap.sh` installs
-  `<APP_NAME>-daily-import.service`/`.timer` but does not enable or start
-  them — the placeholder schedule in `templates/daily-import.timer` (03:00
-  UTC) and any flags on `ExecStart` are issue **#17**'s to finalise and
-  enable.
+- **The daily-import timer.** See "The daily import (issue #17)" above —
+  `bootstrap.sh` installs and enables it automatically.

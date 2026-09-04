@@ -120,20 +120,38 @@ envsubst "$GUNICORN_VARS" \
   < "$SCRIPT_DIR/templates/gunicorn.service" \
   > "/etc/systemd/system/$APP_NAME.service"
 
-IMPORT_VARS='${APP_NAME} ${APP_USER} ${APP_DIR}'
-envsubst "$IMPORT_VARS" \
+# envsubst can substitute text, not branch — the --fetch flag is decided
+# here in bash from app.env's IMPORT_FETCH (default: unset -> no --fetch,
+# i.e. read the local izsoles.csv per #4; see README.md's "izsoles.csv on
+# the VPS" note on why --fetch may 403 from a VPS IP).
+if [[ "${IMPORT_FETCH:-false}" =~ ^([1Tt]|[Yy]|true|yes)$ ]]; then
+  IMPORT_FETCH_FLAG="--fetch"
+else
+  IMPORT_FETCH_FLAG=""
+fi
+export IMPORT_FETCH_FLAG
+# HH:MM the daily import runs at, Europe/Riga (see templates/daily-import.timer).
+IMPORT_SCHEDULE="${IMPORT_SCHEDULE:-07:00}"
+export IMPORT_SCHEDULE
+
+SERVICE_VARS='${APP_NAME} ${APP_USER} ${APP_DIR} ${IMPORT_FETCH_FLAG}'
+envsubst "$SERVICE_VARS" \
   < "$SCRIPT_DIR/templates/daily-import.service" \
   > "/etc/systemd/system/$APP_NAME-daily-import.service"
-envsubst "$IMPORT_VARS" \
+TIMER_VARS='${APP_NAME} ${IMPORT_SCHEDULE}'
+envsubst "$TIMER_VARS" \
   < "$SCRIPT_DIR/templates/daily-import.timer" \
   > "/etc/systemd/system/$APP_NAME-daily-import.timer"
 
 systemctl daemon-reload
 # Gunicorn: enabled so it comes back on reboot; deploy.sh (called below)
-# does the actual start via `systemctl restart`. The daily-import
-# service/timer are installed only, per #16 — left disabled/unstarted for
-# #17 to enable once it has settled on a schedule.
+# does the actual start via `systemctl restart`.
 systemctl enable "$APP_NAME.service"
+# The daily-import *timer* is enabled and started now (#17) — the service
+# itself is never `enable`d (it's Type=oneshot, triggered only by the
+# timer or a manual `systemctl start`). `enable --now` is idempotent: safe
+# to re-run bootstrap.sh.
+systemctl enable --now "$APP_NAME-daily-import.timer"
 
 echo "==> [8/9] obtaining a TLS certificate for $DOMAIN"
 if [[ -d "/etc/letsencrypt/live/$DOMAIN" ]]; then

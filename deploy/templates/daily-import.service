@@ -3,13 +3,22 @@
 # instead and re-run bootstrap.sh (then `systemctl daemon-reload`).
 #
 # Rendered with:
-#   envsubst '${APP_NAME} ${APP_USER} ${APP_DIR}' \
+#   envsubst '${APP_NAME} ${APP_USER} ${APP_DIR} ${IMPORT_FETCH_FLAG}' \
 #     < daily-import.service > /etc/systemd/system/${APP_NAME}-daily-import.service
 #
-# Minimal placeholder per issue #16 — bootstrap.sh installs this unit but
-# does NOT enable or start it (or its matching .timer); #17 owns the actual
-# schedule, logging and any flags (e.g. --fetch) to run_daily_import with,
-# and is expected to adjust ExecStart/the timer's [Timer] section as needed.
+# ${IMPORT_FETCH_FLAG} is computed by bootstrap.sh from app.env's IMPORT_FETCH
+# (1/true/yes -> "--fetch", else empty) — envsubst can only substitute text,
+# not branch, so the flag is decided in bash before rendering. Default (no
+# --fetch) reads the local izsoles.csv an operator drops at IZSOLES_CSV_PATH
+# (#4); --fetch additionally tries the open-data URL first, which may 403
+# from a VPS IP — see README.md's "izsoles.csv on the VPS" note.
+#
+# stdout/stderr go to journald under this unit by default — no bespoke
+# logfile, no logrotate config needed. See README.md — "Logs".
+#
+# Extension point (not built, see #17's out-of-scope): add
+#   OnFailure=<some-alerting-unit>.service
+# under [Unit] to hook a failed run into email/Telegram/Healthchecks.io.
 
 [Unit]
 Description=${APP_NAME} daily izsoles.csv import
@@ -22,4 +31,4 @@ User=${APP_USER}
 Group=${APP_USER}
 WorkingDirectory=${APP_DIR}
 EnvironmentFile=/etc/${APP_NAME}/app.env
-ExecStart=/usr/local/bin/uv run python manage.py run_daily_import
+ExecStart=/usr/local/bin/uv run python manage.py run_daily_import ${IMPORT_FETCH_FLAG}
