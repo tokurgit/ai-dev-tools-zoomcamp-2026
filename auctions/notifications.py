@@ -5,12 +5,19 @@
 (filter profile, listing, alert type) that does not already have one — of *any*
 status — and nothing else: no email is sent, no row is marked ``sent``.
 
-Idempotent: running it twice over the same input inserts rows only once, both
-against what is already in the database and against duplicates within the run
-itself.
+:func:`queue_deadline_notifications` is the time-driven counterpart (#19): it
+is not fed created/updated lists, but scans still-open listings itself and
+matches each against the ``notify_deadline=True`` profiles whose own
+``deadline_days`` covers how soon it ends. Both functions share the same
+dedup + bulk_create core (:func:`_queue`).
+
+Idempotent: running either twice over the same input/state inserts rows only
+once, both against what is already in the database and against duplicates
+within the run itself.
 """
 
 import dataclasses
+import math
 
 from django.conf import settings
 from django.db import transaction
@@ -19,7 +26,53 @@ from django.utils import timezone
 
 from accounts.models import FilterProfile
 from auctions.email import get_backend
-from auctions.models import Notification
+from auctions.matching import match_profiles
+from auctions.models import Listing, Notification
+
+
+def _queue(pairs):
+    """Insert ``pending`` notifications for pre-built pairs; return them.
+
+    ``pairs`` is any iterable of ``(profile, listing, alert_type)`` triples.
+    This is the dedup + bulk-insert core shared by :func:`queue_notifications`
+    and :func:`queue_deadline_notifications`: it dedups repeats within *pairs*
+    itself (dict-keyed on ``(profile.pk, listing.pk, alert_type)``) and against
+    any ``Notification`` (any status) that already exists for that triple, then
+    ``bulk_create``s the rest inside a single transaction — a mid-run failure
+    leaves no partial batch. ``user`` is copied from ``profile.user``.
+
+    Returns the list of :class:`Notification` objects actually created.
+    """
+    # (filter_profile.pk, listing.pk, alert_type) -> (profile, listing, alert_type)
+    # dict membership dedups repeats within the run (e.g. a listing that shows
+    # up twice for one profile, or is passed in more than once).
+    planned = {}
+    for profile, listing, alert_type in pairs:
+        planned.setdefault(
+            (profile.pk, listing.pk, alert_type), (profile, listing, alert_type)
+        )
+
+    listing_ids = {listing_pk for _, listing_pk, _ in planned}
+    already = set(
+        Notification.objects.filter(listing_id__in=listing_ids).values_list(
+            "filter_profile_id", "listing_id", "alert_type"
+        )
+    )
+    to_create = [
+        Notification(
+            user=profile.user,
+            filter_profile=profile,
+            listing=listing,
+            alert_type=alert_type,
+            status=Notification.Status.PENDING,
+        )
+        for key, (profile, listing, alert_type) in planned.items()
+        if key not in already
+    ]
+
+    with transaction.atomic():
+        Notification.objects.bulk_create(to_create)
+    return to_create
 
 
 def queue_notifications(created, updated, matches):
@@ -46,43 +99,68 @@ def queue_notifications(created, updated, matches):
 
     Returns the list of :class:`Notification` objects actually created.
     """
-    # (filter_profile.pk, listing.pk, alert_type) -> (profile, listing, alert_type)
-    # dict membership dedups repeats within the run (e.g. a listing that shows
-    # up in both `created` and `updated` for one profile, or twice in one list).
-    planned = {}
-    for listings, alert_type, pref in (
-        (created, Notification.AlertType.NEW, "notify_new"),
-        (updated, Notification.AlertType.CHANGED, "notify_change"),
-    ):
-        for listing in listings:
-            for profile in matches.get(listing, ()):
-                if getattr(profile, pref):
-                    planned.setdefault(
-                        (profile.pk, listing.pk, alert_type),
-                        (profile, listing, alert_type),
-                    )
-
-    listing_ids = {listing_pk for _, listing_pk, _ in planned}
-    already = set(
-        Notification.objects.filter(listing_id__in=listing_ids).values_list(
-            "filter_profile_id", "listing_id", "alert_type"
+    pairs = (
+        (profile, listing, alert_type)
+        for listings, alert_type, pref in (
+            (created, Notification.AlertType.NEW, "notify_new"),
+            (updated, Notification.AlertType.CHANGED, "notify_change"),
         )
+        for listing in listings
+        for profile in matches.get(listing, ())
+        if getattr(profile, pref)
     )
-    to_create = [
-        Notification(
-            user=profile.user,
-            filter_profile=profile,
-            listing=listing,
-            alert_type=alert_type,
-            status=Notification.Status.PENDING,
-        )
-        for key, (profile, listing, alert_type) in planned.items()
-        if key not in already
-    ]
+    return _queue(pairs)
 
-    with transaction.atomic():
-        Notification.objects.bulk_create(to_create)
-    return to_create
+
+def queue_deadline_notifications(now=None):
+    """Queue ``deadline`` notifications for listings ending soon; return them.
+
+    Scans "current, still-open" listings — ``state == "apstiprināta"`` and
+    ``end_time`` strictly after *now* (defaults to
+    :func:`django.utils.timezone.now`) — against every ``FilterProfile`` with
+    ``notify_deadline=True``.
+
+    For each listing, the number of days remaining is
+    ``ceil((end_time - now).total_seconds() / 86400)`` — a listing 2.5 days out
+    counts as "3 days out", so a profile with ``deadline_days=3`` catches it but
+    one with ``deadline_days=2`` does not. Rounding is always up (ceiling),
+    never down or exact-fractional, and the comparison is against each
+    profile's own ``deadline_days`` (``days_remaining <= profile.deadline_days``)
+    — that per-profile threshold is why this can't share one global cutoff with
+    :func:`queue_notifications`.
+
+    A listing with no ``notify_deadline=True`` profile whose ``deadline_days``
+    covers its remaining time is skipped before :func:`auctions.matching.match_profiles`
+    is ever called for it; listings that do have eligible profiles are matched
+    against just that eligible subset, so criteria (region, category, price,
+    ...) still gate the notification exactly as for ``new`` / ``changed``.
+
+    Reuses the same dedup + bulk_create core as :func:`queue_notifications`
+    (:func:`_queue`), so the ``UniqueConstraint`` on (``filter_profile``,
+    ``listing``, ``alert_type``) makes a second run over the same state queue
+    nothing new.
+
+    Returns the list of :class:`Notification` objects actually created — the
+    same shape as :func:`queue_notifications`.
+    """
+    now = now or timezone.now()
+    listings = Listing.objects.filter(state="apstiprināta", end_time__gt=now)
+    deadline_profiles = list(FilterProfile.objects.filter(notify_deadline=True))
+
+    pairs = []
+    for listing in listings:
+        days_remaining = math.ceil((listing.end_time - now).total_seconds() / 86400)
+        eligible = [
+            profile
+            for profile in deadline_profiles
+            if days_remaining <= profile.deadline_days
+        ]
+        if not eligible:
+            continue
+        for profile in match_profiles(listing, eligible):
+            pairs.append((profile, listing, Notification.AlertType.DEADLINE))
+
+    return _queue(pairs)
 
 
 @dataclasses.dataclass(frozen=True)
