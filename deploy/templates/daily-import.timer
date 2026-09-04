@@ -1,0 +1,24 @@
+# Managed by deploy/bootstrap.sh — do not hand-edit the installed unit at
+# /etc/systemd/system/${APP_NAME}-daily-import.timer; edit this template
+# instead and re-run bootstrap.sh (then `systemctl daemon-reload`).
+#
+# Rendered with:
+#   envsubst '${APP_NAME}' \
+#     < daily-import.timer > /etc/systemd/system/${APP_NAME}-daily-import.timer
+#
+# Placeholder schedule (03:00 UTC daily, +/- 5 minutes) per issue #16;
+# bootstrap.sh installs but does not enable/start this timer — #17 owns
+# picking the real schedule and is expected to adjust [Timer] as needed,
+# then explicitly `systemctl enable --now ${APP_NAME}-daily-import.timer`.
+
+[Unit]
+Description=Timer for ${APP_NAME} daily izsoles.csv import
+
+[Timer]
+Unit=${APP_NAME}-daily-import.service
+OnCalendar=*-*-* 03:00:00
+RandomizedDelaySec=300
+Persistent=true
+
+[Install]
+WantedBy=timers.target

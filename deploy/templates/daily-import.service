@@ -1,0 +1,25 @@
+# Managed by deploy/bootstrap.sh — do not hand-edit the installed unit at
+# /etc/systemd/system/${APP_NAME}-daily-import.service; edit this template
+# instead and re-run bootstrap.sh (then `systemctl daemon-reload`).
+#
+# Rendered with:
+#   envsubst '${APP_NAME} ${APP_USER} ${APP_DIR}' \
+#     < daily-import.service > /etc/systemd/system/${APP_NAME}-daily-import.service
+#
+# Minimal placeholder per issue #16 — bootstrap.sh installs this unit but
+# does NOT enable or start it (or its matching .timer); #17 owns the actual
+# schedule, logging and any flags (e.g. --fetch) to run_daily_import with,
+# and is expected to adjust ExecStart/the timer's [Timer] section as needed.
+
+[Unit]
+Description=${APP_NAME} daily izsoles.csv import
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=${APP_USER}
+Group=${APP_USER}
+WorkingDirectory=${APP_DIR}
+EnvironmentFile=/etc/${APP_NAME}/app.env
+ExecStart=/usr/local/bin/uv run python manage.py run_daily_import

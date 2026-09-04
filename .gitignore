@@ -20,6 +20,7 @@ htmlcov/
 
 # Environment
 .env
+deploy/app.env
 
 # Operator-supplied reference data (see data/README.md)
 data/*.csv

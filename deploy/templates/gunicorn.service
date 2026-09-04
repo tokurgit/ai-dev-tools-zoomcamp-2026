@@ -1,0 +1,36 @@
+# Managed by deploy/bootstrap.sh — do not hand-edit the installed unit at
+# /etc/systemd/system/${APP_NAME}.service; edit this template instead and
+# re-run bootstrap.sh (then `systemctl daemon-reload`) to re-render it.
+#
+# Rendered with:
+#   envsubst '${APP_NAME} ${APP_USER} ${APP_DIR} ${GUNICORN_WORKERS}' \
+#     < gunicorn.service > /etc/systemd/system/${APP_NAME}.service
+# Only those four variables are substituted — systemd's own "$MAINPID"
+# specifier below is left literal (it is not in that list).
+#
+# Plain unix-socket bind (not systemd socket activation): Gunicorn owns and
+# unlinks/recreates its own socket file on start, which keeps this unit
+# simple and matches the AC's own suggested ExecStart. The tradeoff is a
+# very short window on restart where the socket doesn't exist and Nginx
+# gets a 502 instead of a queued connection — acceptable for a single-box,
+# no-zero-downtime v1 (see README.md).
+
+[Unit]
+Description=${APP_NAME} Gunicorn application server
+After=network.target
+
+[Service]
+Type=simple
+User=${APP_USER}
+Group=${APP_USER}
+WorkingDirectory=${APP_DIR}
+EnvironmentFile=/etc/${APP_NAME}/app.env
+UMask=0007
+ExecStartPre=/bin/mkdir -p ${APP_DIR}/run
+ExecStart=/usr/local/bin/uv run gunicorn config.wsgi:application --bind unix:${APP_DIR}/run/gunicorn.sock --workers ${GUNICORN_WORKERS}
+ExecReload=/bin/kill -s HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
