@@ -30,6 +30,13 @@ targets handle it.
 
 Then set up the database:
 
+> **Upgrading an existing checkout:** the project uses a custom user model
+> (`accounts.User`, `AUTH_USER_MODEL`). Django cannot switch to it on a database
+> that already ran the `auth`/`admin` migrations, so if you have a pre-existing
+> `db.sqlite3` from before this change, delete it first (`make clean` or
+> `rm db.sqlite3`) and recreate it with the steps below. Fresh clones are
+> unaffected.
+
 ```bash
 make migrate                 # apply migrations
 make load-reference-data     # load Category/Region lookups from data/*.csv

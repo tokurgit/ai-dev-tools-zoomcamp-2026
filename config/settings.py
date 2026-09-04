@@ -38,10 +38,17 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'accounts',
     'auctions',
 ]
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# Custom user model. Set from the outset so auth/admin migrations bind to it on a
+# fresh database. Switching an existing install requires deleting db.sqlite3
+# first (see README) — Django refuses to swap the user model after auth/admin
+# migrations have run.
+AUTH_USER_MODEL = 'accounts.User'
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
