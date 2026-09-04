@@ -58,6 +58,13 @@ so no extra flags are needed. You can also pass raw pytest args:
 uv run pytest -x -q auctions/tests/
 ```
 
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every push and pull request: it installs
+with `uv` and runs `uv run pytest`, which includes the coverage gate
+(`--cov-fail-under`). The check is red if any test fails or if total coverage
+drops below the committed floor.
+
 ## Common commands
 
 | `make` target            | What it does                                             |

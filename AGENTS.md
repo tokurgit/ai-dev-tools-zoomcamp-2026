@@ -8,6 +8,9 @@ Rules
 
 - Dependencies are added in `pyproject.toml`. Do not add one without
   asking
+- CI (`.github/workflows/ci.yml`) runs `uv run pytest` on every push and
+  pull request; it fails on a failing test or a coverage drop below the
+  `--cov-fail-under` floor
 
 
 Documents

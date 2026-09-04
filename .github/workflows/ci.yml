@@ -1,0 +1,31 @@
+name: CI
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv (pinned) with Python 3.13
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.6.0"
+          python-version: "3.13"  # matches requires-python in pyproject.toml
+          enable-cache: true
+
+      - name: Install dependencies from the lockfile
+        run: uv sync --frozen
+
+      # `uv run pytest` carries --cov and --cov-fail-under (pyproject.toml),
+      # so a failing test OR a coverage drop below the floor fails this step.
+      - name: Run test suite + coverage gate
+        run: uv run pytest
