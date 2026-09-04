@@ -8,12 +8,25 @@
       hx-swap="outerHTML">
   {% csrf_token %}
   {{ form.non_field_errors }}
-  {% for field in form %}
+  {% for field in form.primary_fields %}
     <p>
       {{ field.label_tag }}
       {{ field }}
       {{ field.errors }}
     </p>
   {% endfor %}
+  <fieldset id="notifications">
+    <legend>Notifications</legend>
+    {# Marker: lets the form tell a submitted section (every box may be off) #}
+    {# apart from a POST that never rendered the fieldset. See forms.py. #}
+    <input type="hidden" name="notifications_section" value="1">
+    {% for field in form.notification_fields %}
+      <p{% if field.name == "deadline_days" %} data-shown-when="notify_deadline"{% endif %}>
+        {{ field.label_tag }}
+        {{ field }}
+        {{ field.errors }}
+      </p>
+    {% endfor %}
+  </fieldset>
   <button type="submit">{{ submit_label|default:"Create profile" }}</button>
 </form>

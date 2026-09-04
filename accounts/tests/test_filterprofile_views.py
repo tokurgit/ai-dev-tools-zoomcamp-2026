@@ -12,6 +12,8 @@ from accounts.forms import FilterProfileForm, state_choices
 from accounts.models import FilterProfile
 from accounts.summaries import summarize_criteria, summarize_preferences
 from auctions.models import Category, Listing, Notification, Region
+from auctions.notifications import DispatchResult, dispatch_pending
+from auctions.tests.support import RecordingBackend
 
 User = get_user_model()
 
@@ -603,3 +605,237 @@ class ListViewEditDeleteLinksTest(EditDeleteMixin, TestCase):
         response = self.client.get(LIST_URL)
         self.assertContains(response, f'href="{edit_url(self.profile.pk)}"')
         self.assertContains(response, f'href="{delete_url(self.profile.pk)}"')
+
+
+# --------------------------------------------------------------------------- #
+# Issue #14 — the "Notifications" fieldset + delivery-driven email grouping
+# --------------------------------------------------------------------------- #
+
+
+class NotificationsSectionCreateTest(RefDataMixin, TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.make_ref_data()
+        cls.alice = User.objects.create_user("alice", password="pw")
+
+    def setUp(self):
+        self.client.login(username="alice", password="pw")
+
+    def section_payload(self, **overrides):
+        """A create payload that includes the Notifications fieldset marker."""
+        payload = {
+            "name": "Rīga flats",
+            "price_min": "100",
+            "notifications_section": "1",
+            "delivery": "digest",
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_form_renders_the_notifications_fieldset(self):
+        response = self.client.get(CREATE_URL)
+        self.assertContains(response, "<legend>Notifications</legend>", html=False)
+        self.assertContains(response, 'name="notifications_section"')
+        self.assertContains(response, 'name="notify_new"')
+        self.assertContains(response, 'name="notify_change"')
+        self.assertContains(response, 'name="notify_deadline"')
+        self.assertContains(response, 'name="deadline_days"')
+        self.assertContains(response, 'name="delivery"')
+
+    def test_post_without_the_section_stores_the_issue6_defaults(self):
+        # No `notifications_section` marker -> section was never rendered.
+        self.client.post(CREATE_URL, {"name": "no section", "price_min": "5"})
+        profile = FilterProfile.objects.get()
+        self.assertIs(profile.notify_new, True)
+        self.assertIs(profile.notify_change, False)
+        self.assertIs(profile.notify_deadline, False)
+        self.assertEqual(profile.deadline_days, 3)
+        self.assertEqual(profile.delivery, "digest")
+
+    def test_section_present_persists_the_submitted_choices(self):
+        self.client.post(
+            CREATE_URL,
+            self.section_payload(
+                notify_new="on",
+                notify_change="on",
+                notify_deadline="on",
+                deadline_days="10",
+                delivery="immediate",
+            ),
+        )
+        profile = FilterProfile.objects.get()
+        self.assertIs(profile.notify_new, True)
+        self.assertIs(profile.notify_change, True)
+        self.assertIs(profile.notify_deadline, True)
+        self.assertEqual(profile.deadline_days, 10)
+        self.assertEqual(profile.delivery, "immediate")
+
+    def test_section_present_absent_delivery_falls_back_to_digest(self):
+        payload = self.section_payload(notify_new="on")
+        del payload["delivery"]
+        self.client.post(CREATE_URL, payload)
+        self.assertEqual(FilterProfile.objects.get().delivery, "digest")
+
+    def test_all_three_alert_types_off_is_a_form_error_and_saves_nothing(self):
+        response = self.client.post(CREATE_URL, self.section_payload())
+        self.assertEqual(response.status_code, 200)
+        form = response.context["form"]
+        self.assertFalse(form.is_valid())
+        self.assertIn("no alerts sends nothing", form.non_field_errors()[0])
+        self.assertFalse(FilterProfile.objects.exists())
+
+    def test_notify_deadline_on_with_blank_deadline_days_is_a_form_error(self):
+        response = self.client.post(
+            CREATE_URL,
+            self.section_payload(notify_deadline="on", deadline_days=""),
+        )
+        self.assertEqual(response.status_code, 200)
+        form = response.context["form"]
+        self.assertFalse(form.is_valid())
+        self.assertIn(
+            "deadline_days is required", form.non_field_errors()[0]
+        )
+        self.assertFalse(FilterProfile.objects.exists())
+
+    def test_deadline_days_out_of_range_is_a_form_error(self):
+        response = self.client.post(
+            CREATE_URL,
+            self.section_payload(notify_new="on", deadline_days="40"),
+        )
+        self.assertEqual(response.status_code, 200)
+        form = response.context["form"]
+        self.assertFalse(form.is_valid())
+        self.assertIn("between 1 and 30", form.non_field_errors()[0])
+        self.assertFalse(FilterProfile.objects.exists())
+
+    def test_deadline_days_at_the_lower_bound_is_accepted(self):
+        self.client.post(
+            CREATE_URL,
+            self.section_payload(notify_new="on", deadline_days="1"),
+        )
+        self.assertEqual(FilterProfile.objects.get().deadline_days, 1)
+
+
+class NotificationsSectionEditTest(EditDeleteMixin, TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.profile.notify_new = False
+        cls.profile.notify_change = True
+        cls.profile.notify_deadline = True
+        cls.profile.deadline_days = 12
+        cls.profile.delivery = FilterProfile.Delivery.IMMEDIATE
+        cls.profile.save()
+
+    def setUp(self):
+        self.client.login(username="alice", password="pw")
+
+    def test_edit_get_prepopulates_the_preference_fields_from_the_instance(self):
+        response = self.client.get(edit_url(self.profile.pk))
+        form = response.context["form"]
+        self.assertIs(form.initial["notify_new"], False)
+        self.assertIs(form.initial["notify_change"], True)
+        self.assertIs(form.initial["notify_deadline"], True)
+        self.assertEqual(form.initial["deadline_days"], 12)
+        self.assertEqual(
+            form.initial["delivery"], FilterProfile.Delivery.IMMEDIATE
+        )
+
+    def test_edit_post_without_the_section_keeps_stored_preferences(self):
+        self.client.post(edit_url(self.profile.pk), self.valid_payload())
+        self.profile.refresh_from_db()
+        self.assertIs(self.profile.notify_new, False)
+        self.assertIs(self.profile.notify_change, True)
+        self.assertIs(self.profile.notify_deadline, True)
+        self.assertEqual(self.profile.deadline_days, 12)
+        self.assertEqual(self.profile.delivery, "immediate")
+
+    def test_edit_post_with_the_section_updates_the_preferences(self):
+        self.client.post(
+            edit_url(self.profile.pk),
+            self.valid_payload(
+                notifications_section="1",
+                notify_new="on",
+                deadline_days="7",
+                delivery="digest",
+            ),
+        )
+        self.profile.refresh_from_db()
+        self.assertIs(self.profile.notify_new, True)
+        self.assertIs(self.profile.notify_change, False)
+        self.assertIs(self.profile.notify_deadline, False)
+        self.assertEqual(self.profile.deadline_days, 7)
+        self.assertEqual(self.profile.delivery, "digest")
+
+
+class DeliveryDrivesEmailGroupingTest(EditDeleteMixin, TestCase):
+    """End-to-end: editing `delivery` changes how #9 groups the emails."""
+
+    def setUp(self):
+        self.client.login(username="alice", password="pw")
+        self.l1 = make_listing("apstiprināta")
+        self.l2 = make_listing("apstiprināta")
+
+    def _pending(self, listing, alert_type):
+        return Notification.objects.create(
+            user=self.alice,
+            filter_profile=self.profile,
+            listing=listing,
+            alert_type=alert_type,
+        )
+
+    def test_switching_to_immediate_makes_two_pendings_go_out_as_two_emails(self):
+        self._pending(self.l1, Notification.AlertType.NEW)
+        self._pending(self.l2, Notification.AlertType.NEW)
+
+        self.client.post(
+            edit_url(self.profile.pk),
+            self.valid_payload(
+                notifications_section="1",
+                notify_new="on",
+                deadline_days="3",
+                delivery="immediate",
+            ),
+        )
+        self.profile.refresh_from_db()
+        self.assertEqual(self.profile.delivery, "immediate")
+
+        backend = RecordingBackend()
+        result = dispatch_pending(backend)
+
+        self.assertEqual(len(backend.messages), 2)
+        self.assertEqual(result, DispatchResult(emails=2, sent=2, failed=0))
+
+    def test_a_digest_profile_sends_two_pendings_as_one_email(self):
+        self._pending(self.l1, Notification.AlertType.NEW)
+        self._pending(self.l2, Notification.AlertType.NEW)
+        self.assertEqual(self.profile.delivery, "digest")
+
+        backend = RecordingBackend()
+        result = dispatch_pending(backend)
+
+        self.assertEqual(len(backend.messages), 1)
+        self.assertEqual(result, DispatchResult(emails=1, sent=2, failed=0))
+
+
+class ListViewReflectsPreferencesTest(RefDataMixin, TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.make_ref_data()
+        cls.alice = User.objects.create_user("alice", password="pw")
+        cls.profile = FilterProfile.objects.create(
+            user=cls.alice,
+            name="Deadlines",
+            criteria={"region_ids": [7]},
+            notify_new=False,
+            notify_deadline=True,
+            deadline_days=9,
+            delivery=FilterProfile.Delivery.IMMEDIATE,
+        )
+
+    def test_summary_line_reflects_the_current_preferences(self):
+        self.client.login(username="alice", password="pw")
+        response = self.client.get(LIST_URL)
+        self.assertContains(
+            response, "Notify on deadline in 9d; immediate delivery"
+        )

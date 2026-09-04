@@ -38,6 +38,20 @@ def state_choices():
 
 
 class FilterProfileForm(forms.ModelForm):
+    #: The "Notifications" fieldset (issue #14). All five are real
+    #: :class:`~accounts.models.FilterProfile` columns from issue #6, listed in
+    #: ``Meta.fields`` so a ``ModelForm`` pre-populates them from ``instance`` on
+    #: edit and persists them on save. The template renders them in their own
+    #: ``<fieldset>`` behind a hidden ``notifications_section`` marker — see
+    #: :meth:`_clean_notifications` for why the marker matters.
+    NOTIFICATION_FIELDS = (
+        "notify_new",
+        "notify_change",
+        "notify_deadline",
+        "deadline_days",
+        "delivery",
+    )
+
     regions = forms.ModelMultipleChoiceField(
         queryset=Region.objects.all(), required=False
     )
@@ -51,10 +65,28 @@ class FilterProfileForm(forms.ModelForm):
         required=False, min_value=Decimal("0"), max_digits=14, decimal_places=2
     )
     states = forms.MultipleChoiceField(required=False)
+    #: Radio, not the model's default ``Select``. ``required=False`` so a POST
+    #: that omits it (or the whole section) falls back to ``digest`` in
+    #: :meth:`_clean_notifications` rather than erroring.
+    delivery = forms.ChoiceField(
+        choices=FilterProfile.Delivery.choices,
+        widget=forms.RadioSelect,
+        required=False,
+    )
+    #: Range (1..30) and the "required when ``notify_deadline`` is on" rule are
+    #: enforced in :meth:`_clean_notifications`, per the issue.
+    deadline_days = forms.IntegerField(required=False)
 
     class Meta:
         model = FilterProfile
-        fields = ["name"]
+        fields = [
+            "name",
+            "notify_new",
+            "notify_change",
+            "notify_deadline",
+            "deadline_days",
+            "delivery",
+        ]
 
     def __init__(self, *args, user=None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -64,6 +96,14 @@ class FilterProfileForm(forms.ModelForm):
         self.fields["states"].choices = state_choices()
         if self.instance.pk:
             self._populate_from_criteria(self.instance.criteria or {})
+
+    def primary_fields(self):
+        """The non-notification bound fields, for the template's first block."""
+        return [f for f in self if f.name not in self.NOTIFICATION_FIELDS]
+
+    def notification_fields(self):
+        """The bound fields rendered inside the "Notifications" fieldset."""
+        return [self[name] for name in self.NOTIFICATION_FIELDS]
 
     def _populate_from_criteria(self, criteria):
         """Seed the discrete fields from a stored ``criteria`` dict.
@@ -115,4 +155,50 @@ class FilterProfileForm(forms.ModelForm):
             )
 
         self.instance.criteria = criteria
+
+        self._clean_notifications(cleaned)
         return cleaned
+
+    def _clean_notifications(self, cleaned):
+        """Validate / default the "Notifications" fieldset (issue #14).
+
+        The fieldset carries a hidden ``notifications_section`` marker. Its
+        presence tells an actually-submitted section (where every checkbox may
+        legitimately be off) apart from a POST that never rendered the section
+        at all — e.g. an API-style ``{"name": ..., "price_min": ...}``. Without
+        the marker there is no way to distinguish "user unchecked everything"
+        from "field absent", because an unchecked HTML checkbox sends nothing.
+
+        Marker absent → drop the five preference keys from ``cleaned_data`` so
+        ``construct_instance`` skips them: a new profile keeps issue #6's model
+        defaults (``notify_new=True`` etc.), an edited profile keeps its stored
+        values. Marker present → default a missing ``delivery`` to ``digest``
+        and enforce the three validation rules.
+        """
+        if "notifications_section" not in self.data:
+            for name in self.NOTIFICATION_FIELDS:
+                cleaned.pop(name, None)
+            return
+
+        if not cleaned.get("delivery"):
+            cleaned["delivery"] = FilterProfile.Delivery.DIGEST
+
+        if not (
+            cleaned.get("notify_new")
+            or cleaned.get("notify_change")
+            or cleaned.get("notify_deadline")
+        ):
+            raise forms.ValidationError(
+                "A profile with no alerts sends nothing — turn on at least one "
+                "of new listings, changes, or deadlines."
+            )
+
+        deadline_days = cleaned.get("deadline_days")
+        if deadline_days is not None and not 1 <= deadline_days <= 30:
+            raise forms.ValidationError(
+                "deadline_days must be between 1 and 30."
+            )
+        if cleaned.get("notify_deadline") and deadline_days is None:
+            raise forms.ValidationError(
+                "deadline_days is required when the deadline alert is on."
+            )
