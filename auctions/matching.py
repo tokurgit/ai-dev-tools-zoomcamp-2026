@@ -15,8 +15,9 @@ Both arguments are duck-typed:
 - each profile is an object *or* a mapping exposing ``criteria`` (a dict).
 
 The ``criteria`` schema and its semantics are pinned by
-``accounts.models.FilterProfile`` (issue #6); the constants below are kept in
-sync with it by hand rather than imported, to keep this module model-free:
+``accounts.models.FilterProfile`` (issue #6). The machine-checkable constants
+are imported from :mod:`auctions.criteria` (model-free, stdlib only) so this
+module and the model share one definition and cannot drift. The semantics:
 
 - **Keys are ANDed** — a profile matches only if every present constraint holds.
 - **List values are ORed** — ``region_ids: [7, 96]`` matches region 7 or 96.
@@ -35,17 +36,8 @@ Django's ``ValidationError`` since this module is model-free.
 from collections.abc import Mapping
 from decimal import Decimal, InvalidOperation
 
-#: The only keys ``criteria`` may contain (mirrors ``FilterProfile``).
-ALLOWED_CRITERIA_KEYS = frozenset(
-    {"region_ids", "category_ids", "price_min", "price_max", "states"}
-)
-
-#: criteria list-key -> the listing field it constrains.
-_LIST_DIMENSIONS = {
-    "region_ids": "region_id",
-    "category_ids": "category_id",
-    "states": "state",
-}
+from auctions.criteria import ALLOWED_KEYS as ALLOWED_CRITERIA_KEYS
+from auctions.criteria import LIST_DIMENSIONS as _LIST_DIMENSIONS
 
 
 def _get(obj, key):

@@ -5,6 +5,8 @@ from django.contrib.auth.models import AbstractUser
 from django.core.exceptions import ValidationError
 from django.db import models
 
+from auctions.criteria import ALLOWED_KEYS, LIST_KEYS
+
 
 class User(AbstractUser):
     """Project user.
@@ -47,12 +49,12 @@ class FilterProfile(models.Model):
     than ``price_max``.
     """
 
-    #: The only keys ``criteria`` may contain.
-    ALLOWED_CRITERIA_KEYS = frozenset(
-        {"region_ids", "category_ids", "price_min", "price_max", "states"}
-    )
+    #: The only keys ``criteria`` may contain. Defined in the model-free
+    #: :mod:`auctions.criteria` so ``clean()`` and ``auctions.matching`` share
+    #: one source and cannot drift.
+    ALLOWED_CRITERIA_KEYS = ALLOWED_KEYS
     #: Keys whose value, when present, must be a JSON list.
-    LIST_CRITERIA_KEYS = ("region_ids", "category_ids", "states")
+    LIST_CRITERIA_KEYS = LIST_KEYS
 
     class Delivery(models.TextChoices):
         IMMEDIATE = "immediate", "Immediate"
