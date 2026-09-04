@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Filter profiles{% endblock %}
+{% block content %}
+  <h1>Your filter profiles</h1>
+
+  {% if rows %}
+    <ul>
+      {% for row in rows %}
+        <li>
+          <strong>{{ row.profile.name }}</strong>
+          <div class="criteria">{{ row.criteria }}</div>
+          <div class="preferences">{{ row.preferences }}</div>
+        </li>
+      {% endfor %}
+    </ul>
+    <p><a href="{% url 'filterprofile_create' %}">New profile</a></p>
+  {% else %}
+    <p>You have no filter profiles yet.</p>
+    <p><a href="{% url 'filterprofile_create' %}">Create your first profile</a></p>
+  {% endif %}
+{% endblock %}

@@ -1,0 +1,18 @@
+{% load static %}
+<form id="filterprofile-form"
+      method="post"
+      action="{% url 'filterprofile_create' %}"
+      hx-post="{% url 'filterprofile_create' %}"
+      hx-target="#filterprofile-form"
+      hx-swap="outerHTML">
+  {% csrf_token %}
+  {{ form.non_field_errors }}
+  {% for field in form %}
+    <p>
+      {{ field.label_tag }}
+      {{ field }}
+      {{ field.errors }}
+    </p>
+  {% endfor %}
+  <button type="submit">Create profile</button>
+</form>

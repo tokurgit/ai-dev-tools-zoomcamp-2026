@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}New filter profile{% endblock %}
+{% block extrahead %}
+  <script src="{% static 'accounts/htmx.min.js' %}" defer></script>
+{% endblock %}
+{% block content %}
+  <h1>New filter profile</h1>
+  {% include "accounts/_filterprofile_form.html" %}
+  <p><a href="{% url 'filterprofile_list' %}">Back to your profiles</a></p>
+{% endblock %}
