@@ -1,6 +1,6 @@
 from django.contrib import messages
 from django.http import HttpResponse
-from django.shortcuts import redirect, render
+from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 
 from accounts.forms import FilterProfileForm
@@ -65,3 +65,70 @@ def filterprofile_create(request):
     else:
         form = FilterProfileForm(user=request.user)
     return render(request, "accounts/filterprofile_form.html", {"form": form})
+
+
+def filterprofile_edit(request, pk):
+    """Edit one of ``request.user``'s filter profiles (issue #13).
+
+    Ownership is enforced at the query — another user's ``pk`` is a 404, never a
+    403 (see ``_docs/access-convention.md``). The #12 :class:`FilterProfileForm`
+    is reused: it pre-populates its discrete fields from the stored ``criteria``
+    on GET and re-serialises them on a valid POST, bumping ``updated_at``
+    (``auto_now``). HTMX behaviour matches create — inline partial on error, a
+    204 + ``HX-Redirect`` on success.
+    """
+    profile = get_object_or_404(FilterProfile, pk=pk, user=request.user)
+    context = {
+        "form_action": reverse("filterprofile_edit", args=[profile.pk]),
+        "page_title": f"Edit “{profile.name}”",
+        "submit_label": "Save changes",
+    }
+    if request.method == "POST":
+        form = FilterProfileForm(
+            request.POST, instance=profile, user=request.user
+        )
+        if form.is_valid():
+            form.save()
+            messages.success(
+                request, f"Filter profile “{profile.name}” updated."
+            )
+            if _is_htmx(request):
+                response = HttpResponse(status=204)
+                response["HX-Redirect"] = reverse("filterprofile_list")
+                return response
+            return redirect("filterprofile_list")
+        if _is_htmx(request):
+            return render(
+                request,
+                "accounts/_filterprofile_form.html",
+                {"form": form, **context},
+            )
+    else:
+        form = FilterProfileForm(instance=profile, user=request.user)
+    return render(
+        request,
+        "accounts/filterprofile_form.html",
+        {"form": form, **context},
+    )
+
+
+def filterprofile_delete(request, pk):
+    """Delete one of ``request.user``'s filter profiles (issue #13).
+
+    Same query-level ownership scoping as :func:`filterprofile_edit`. GET shows
+    a confirmation page; POST hard-deletes the profile. The profile's
+    ``Notification`` rows are kept — their ``filter_profile`` FK is
+    ``on_delete=SET_NULL``, so ``profile.delete()`` nulls the link and leaves
+    the rows (sent and pending alike) attributable via ``user`` + ``listing``.
+    """
+    profile = get_object_or_404(FilterProfile, pk=pk, user=request.user)
+    if request.method == "POST":
+        name = profile.name
+        profile.delete()
+        messages.success(request, f"Filter profile “{name}” deleted.")
+        return redirect("filterprofile_list")
+    return render(
+        request,
+        "accounts/filterprofile_confirm_delete.html",
+        {"profile": profile},
+    )

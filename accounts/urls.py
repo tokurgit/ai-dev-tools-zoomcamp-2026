@@ -11,4 +11,14 @@ from accounts import views
 urlpatterns = [
     path("profiles/", views.filterprofile_list, name="filterprofile_list"),
     path("profiles/new/", views.filterprofile_create, name="filterprofile_create"),
+    path(
+        "profiles/<int:pk>/edit/",
+        views.filterprofile_edit,
+        name="filterprofile_edit",
+    ),
+    path(
+        "profiles/<int:pk>/delete/",
+        views.filterprofile_delete,
+        name="filterprofile_delete",
+    ),
 ]

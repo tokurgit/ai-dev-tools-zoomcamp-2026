@@ -62,6 +62,21 @@ class FilterProfileForm(forms.ModelForm):
         if user is not None:
             self.instance.user = user
         self.fields["states"].choices = state_choices()
+        if self.instance.pk:
+            self._populate_from_criteria(self.instance.criteria or {})
+
+    def _populate_from_criteria(self, criteria):
+        """Seed the discrete fields from a stored ``criteria`` dict.
+
+        The inverse of :meth:`clean`'s serialisation, used when editing an
+        existing profile (issue #13) so both create and edit share one class.
+        Absent keys leave the corresponding field at its empty default.
+        """
+        self.initial.setdefault("regions", criteria.get("region_ids", []))
+        self.initial.setdefault("categories", criteria.get("category_ids", []))
+        self.initial.setdefault("price_min", criteria.get("price_min"))
+        self.initial.setdefault("price_max", criteria.get("price_max"))
+        self.initial.setdefault("states", criteria.get("states", []))
 
     def clean(self):
         cleaned = super().clean()

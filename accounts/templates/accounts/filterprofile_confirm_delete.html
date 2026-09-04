@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Delete filter profile{% endblock %}
+{% block content %}
+  <h1>Delete filter profile</h1>
+  <p>Delete the filter profile “{{ profile.name }}”? This cannot be undone.</p>
+  <p>
+    Alerts already sent for this profile stay in your inbox; only the profile
+    itself is removed.
+  </p>
+  <form method="post">
+    {% csrf_token %}
+    <button type="submit">Delete profile</button>
+  </form>
+  <p><a href="{% url 'filterprofile_list' %}">Cancel</a></p>
+{% endblock %}

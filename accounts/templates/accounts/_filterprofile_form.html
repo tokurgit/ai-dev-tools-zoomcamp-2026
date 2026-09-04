@@ -1,8 +1,9 @@
 {% load static %}
+{% url 'filterprofile_create' as create_url %}
 <form id="filterprofile-form"
       method="post"
-      action="{% url 'filterprofile_create' %}"
-      hx-post="{% url 'filterprofile_create' %}"
+      action="{{ form_action|default:create_url }}"
+      hx-post="{{ form_action|default:create_url }}"
       hx-target="#filterprofile-form"
       hx-swap="outerHTML">
   {% csrf_token %}
@@ -14,5 +15,5 @@
       {{ field.errors }}
     </p>
   {% endfor %}
-  <button type="submit">Create profile</button>
+  <button type="submit">{{ submit_label|default:"Create profile" }}</button>
 </form>

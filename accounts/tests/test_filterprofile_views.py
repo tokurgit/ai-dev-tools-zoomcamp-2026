@@ -1,5 +1,6 @@
-"""Tests for the FilterProfile list and create views (issue #12)."""
+"""Tests for the FilterProfile list/create views (#12) and edit/delete (#13)."""
 
+import time
 import uuid
 
 from django.contrib.auth import get_user_model
@@ -10,7 +11,7 @@ from django.utils import timezone
 from accounts.forms import FilterProfileForm, state_choices
 from accounts.models import FilterProfile
 from accounts.summaries import summarize_criteria, summarize_preferences
-from auctions.models import Category, Listing, Region
+from auctions.models import Category, Listing, Notification, Region
 
 User = get_user_model()
 
@@ -349,3 +350,256 @@ class SummarizePreferencesTest(TestCase):
             summarize_preferences(profile),
             "Notify on nothing; digest delivery",
         )
+
+
+# --------------------------------------------------------------------------- #
+# Issue #13 — edit and delete views
+# --------------------------------------------------------------------------- #
+
+
+def edit_url(pk):
+    return f"/profiles/{pk}/edit/"
+
+
+def delete_url(pk):
+    return f"/profiles/{pk}/delete/"
+
+
+class EditDeleteMixin(RefDataMixin):
+    @classmethod
+    def setUpTestData(cls):
+        cls.make_ref_data()
+        cls.alice = User.objects.create_user("alice", password="pw")
+        cls.bob = User.objects.create_user("bob", password="pw")
+        cls.profile = FilterProfile.objects.create(
+            user=cls.alice,
+            name="Rīga flats",
+            criteria={
+                "region_ids": [7, 96],
+                "category_ids": [1],
+                "price_min": "10000.00",
+                "price_max": "50000.00",
+                "states": ["apstiprināta"],
+            },
+        )
+        cls.bob_profile = FilterProfile.objects.create(
+            user=cls.bob, name="B-one", criteria={"category_ids": [1]}
+        )
+
+    def valid_payload(self, **overrides):
+        payload = {
+            "name": "Rīga flats",
+            "regions": [7],
+            "categories": [2],
+            "price_min": "20000",
+            "price_max": "30000",
+            "states": ["apstiprināta"],
+        }
+        payload.update(overrides)
+        return payload
+
+
+class EditViewAccessTest(EditDeleteMixin, TestCase):
+    def test_anonymous_get_is_redirected_to_login(self):
+        response = self.client.get(edit_url(self.profile.pk))
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response.url.startswith(LOGIN_URL))
+
+    def test_anonymous_post_is_redirected_to_login_and_changes_nothing(self):
+        response = self.client.post(
+            edit_url(self.profile.pk), self.valid_payload()
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response.url.startswith(LOGIN_URL))
+        self.profile.refresh_from_db()
+        self.assertEqual(self.profile.criteria["region_ids"], [7, 96])
+
+    def test_other_users_profile_get_is_404(self):
+        self.client.login(username="bob", password="pw")
+        response = self.client.get(edit_url(self.profile.pk))
+        self.assertEqual(response.status_code, 404)
+
+    def test_other_users_profile_post_is_404_and_changes_nothing(self):
+        self.client.login(username="bob", password="pw")
+        response = self.client.post(
+            edit_url(self.profile.pk), self.valid_payload()
+        )
+        self.assertEqual(response.status_code, 404)
+        self.profile.refresh_from_db()
+        self.assertEqual(self.profile.criteria["region_ids"], [7, 96])
+
+
+class EditViewGetTest(EditDeleteMixin, TestCase):
+    def setUp(self):
+        self.client.login(username="alice", password="pw")
+
+    def test_get_renders_form_prepopulated_from_criteria(self):
+        response = self.client.get(edit_url(self.profile.pk))
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, "accounts/filterprofile_form.html")
+        form = response.context["form"]
+        self.assertIsInstance(form, FilterProfileForm)
+        self.assertEqual(form.initial["regions"], [7, 96])
+        self.assertEqual(form.initial["categories"], [1])
+        self.assertEqual(form.initial["price_min"], "10000.00")
+        self.assertEqual(form.initial["price_max"], "50000.00")
+        self.assertEqual(form.initial["states"], ["apstiprināta"])
+
+    def test_get_form_posts_back_to_the_edit_url(self):
+        response = self.client.get(edit_url(self.profile.pk))
+        self.assertContains(response, f'action="{edit_url(self.profile.pk)}"')
+
+    def test_get_prepopulates_only_the_keys_present_in_criteria(self):
+        sparse = FilterProfile.objects.create(
+            user=self.alice, name="sparse", criteria={"price_min": "5.00"}
+        )
+        response = self.client.get(edit_url(sparse.pk))
+        form = response.context["form"]
+        self.assertEqual(form.initial["price_min"], "5.00")
+        self.assertEqual(form.initial["regions"], [])
+        self.assertEqual(form.initial["categories"], [])
+        self.assertIsNone(form.initial["price_max"])
+        self.assertEqual(form.initial["states"], [])
+
+
+class EditViewPostTest(EditDeleteMixin, TestCase):
+    def setUp(self):
+        self.client.login(username="alice", password="pw")
+
+    def test_valid_post_updates_criteria_bumps_updated_at_and_redirects(self):
+        before = FilterProfile.objects.get(pk=self.profile.pk).updated_at
+        time.sleep(0.01)
+        response = self.client.post(
+            edit_url(self.profile.pk), self.valid_payload(), follow=True
+        )
+        self.assertRedirects(response, LIST_URL)
+        self.assertContains(response, "updated")
+        self.profile.refresh_from_db()
+        self.assertEqual(
+            self.profile.criteria,
+            {
+                "region_ids": [7],
+                "category_ids": [2],
+                "price_min": "20000.00",
+                "price_max": "30000.00",
+                "states": ["apstiprināta"],
+            },
+        )
+        self.assertGreater(self.profile.updated_at, before)
+
+    def test_valid_htmx_post_returns_204_and_hx_redirect(self):
+        response = self.client.post(
+            edit_url(self.profile.pk),
+            self.valid_payload(),
+            headers={"hx-request": "true"},
+        )
+        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response["HX-Redirect"], LIST_URL)
+        self.profile.refresh_from_db()
+        self.assertEqual(self.profile.criteria["region_ids"], [7])
+
+    def test_invalid_post_no_criteria_is_form_error_and_profile_unchanged(self):
+        response = self.client.post(
+            edit_url(self.profile.pk),
+            {"name": "Rīga flats"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.context["form"].is_valid())
+        self.profile.refresh_from_db()
+        self.assertEqual(self.profile.criteria["region_ids"], [7, 96])
+
+    def test_invalid_htmx_post_rerenders_partial_with_errors(self):
+        response = self.client.post(
+            edit_url(self.profile.pk),
+            {"name": "Rīga flats"},
+            headers={"hx-request": "true"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, "accounts/_filterprofile_form.html")
+        self.assertTemplateNotUsed(response, "base.html")
+        self.assertContains(response, "match everything")
+        self.assertContains(response, f'hx-post="{edit_url(self.profile.pk)}"')
+
+
+class DeleteViewTest(EditDeleteMixin, TestCase):
+    def make_notification(self, profile, listing, alert_type):
+        return Notification.objects.create(
+            user=profile.user,
+            filter_profile=profile,
+            listing=listing,
+            alert_type=alert_type,
+        )
+
+    def test_anonymous_get_is_redirected_to_login(self):
+        response = self.client.get(delete_url(self.profile.pk))
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response.url.startswith(LOGIN_URL))
+
+    def test_anonymous_post_is_redirected_and_profile_survives(self):
+        response = self.client.post(delete_url(self.profile.pk))
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response.url.startswith(LOGIN_URL))
+        self.assertTrue(
+            FilterProfile.objects.filter(pk=self.profile.pk).exists()
+        )
+
+    def test_get_shows_confirmation_naming_the_profile(self):
+        self.client.login(username="alice", password="pw")
+        response = self.client.get(delete_url(self.profile.pk))
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(
+            response, "accounts/filterprofile_confirm_delete.html"
+        )
+        self.assertContains(response, "Rīga flats")
+
+    def test_post_deletes_profile_keeps_notifications_with_null_link(self):
+        self.client.login(username="alice", password="pw")
+        listing = make_listing("apstiprināta")
+        sent = self.make_notification(
+            self.profile, listing, Notification.AlertType.NEW
+        )
+        pending = self.make_notification(
+            self.profile, listing, Notification.AlertType.CHANGED
+        )
+        other_listing = make_listing("izsludināta")
+        untouched = self.make_notification(
+            self.bob_profile, other_listing, Notification.AlertType.NEW
+        )
+
+        response = self.client.post(delete_url(self.profile.pk), follow=True)
+        self.assertRedirects(response, LIST_URL)
+        self.assertContains(response, "deleted")
+        self.assertEqual(response.context["rows"], [])
+
+        self.assertFalse(
+            FilterProfile.objects.filter(pk=self.profile.pk).exists()
+        )
+        for note in (sent, pending):
+            note.refresh_from_db()
+            self.assertIsNone(note.filter_profile_id)
+        untouched.refresh_from_db()
+        self.assertEqual(untouched.filter_profile_id, self.bob_profile.pk)
+        self.assertEqual(
+            Notification.objects.filter(filter_profile__isnull=True).count(), 2
+        )
+
+    def test_other_users_profile_get_is_404(self):
+        self.client.login(username="bob", password="pw")
+        response = self.client.get(delete_url(self.profile.pk))
+        self.assertEqual(response.status_code, 404)
+
+    def test_other_users_profile_post_is_404_and_profile_survives(self):
+        self.client.login(username="bob", password="pw")
+        response = self.client.post(delete_url(self.profile.pk))
+        self.assertEqual(response.status_code, 404)
+        self.assertTrue(
+            FilterProfile.objects.filter(pk=self.profile.pk).exists()
+        )
+
+
+class ListViewEditDeleteLinksTest(EditDeleteMixin, TestCase):
+    def test_rows_carry_edit_and_delete_links(self):
+        self.client.login(username="alice", password="pw")
+        response = self.client.get(LIST_URL)
+        self.assertContains(response, f'href="{edit_url(self.profile.pk)}"')
+        self.assertContains(response, f'href="{delete_url(self.profile.pk)}"')

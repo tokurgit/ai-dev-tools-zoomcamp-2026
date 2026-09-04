@@ -10,6 +10,8 @@
           <strong>{{ row.profile.name }}</strong>
           <div class="criteria">{{ row.criteria }}</div>
           <div class="preferences">{{ row.preferences }}</div>
+          <a href="{% url 'filterprofile_edit' row.profile.pk %}">Edit</a>
+          <a href="{% url 'filterprofile_delete' row.profile.pk %}">Delete</a>
         </li>
       {% endfor %}
     </ul>
