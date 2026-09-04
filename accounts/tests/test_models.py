@@ -124,8 +124,11 @@ class FilterProfileCleanTest(TestCase):
 
 class UserModelTest(TestCase):
     def test_user_has_no_extra_fields_beyond_abstract_user(self):
+        reverse_relations = {"filter_profiles", "notifications"}
         own_fields = {
-            f.name for f in User._meta.get_fields() if f.name != "filter_profiles"
+            f.name
+            for f in User._meta.get_fields()
+            if f.name not in reverse_relations
         }
         abstract_fields = {
             "id", "password", "last_login", "is_superuser", "username",

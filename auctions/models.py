@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import models
 
 
@@ -68,3 +69,65 @@ class Listing(models.Model):
 
     def __str__(self):
         return f"{self.source_id}: {self.title}"
+
+
+class Notification(models.Model):
+    """One queued alert: a listing matched a user's filter profile.
+
+    Rows are written by :func:`auctions.notifications.queue_notifications` in
+    ``pending`` state; sending them and flipping ``status`` is issue #9.
+
+    ``filter_profile`` is ``SET_NULL`` so a notification the user may still open
+    survives deletion of the profile that generated it (#13); ``user`` (a
+    denormalised copy of ``filter_profile.user``, set by the queuing function,
+    never user-supplied) and ``listing`` stay the anchors after that. The
+    ``UniqueConstraint`` on (``filter_profile``, ``listing``, ``alert_type``)
+    keeps a profile to at most one notification of each type per listing; once
+    ``filter_profile`` is ``NULL`` the row is historical and no longer takes
+    part in dedup.
+    """
+
+    class AlertType(models.TextChoices):
+        NEW = "new", "New"
+        CHANGED = "changed", "Changed"
+        DEADLINE = "deadline", "Deadline"
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        SENT = "sent", "Sent"
+        FAILED = "failed", "Failed"
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="notifications",
+    )
+    filter_profile = models.ForeignKey(
+        "accounts.FilterProfile",
+        null=True,
+        on_delete=models.SET_NULL,
+        related_name="notifications",
+    )
+    listing = models.ForeignKey(
+        Listing,
+        on_delete=models.CASCADE,
+        related_name="notifications",
+    )
+    alert_type = models.CharField(max_length=8, choices=AlertType.choices)
+    status = models.CharField(
+        max_length=7, choices=Status.choices, default=Status.PENDING
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    error = models.TextField(blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["filter_profile", "listing", "alert_type"],
+                name="unique_notification_per_profile_listing_type",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.user} · {self.alert_type} · {self.listing_id}"
