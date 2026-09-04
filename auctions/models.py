@@ -39,9 +39,14 @@ class Listing(models.Model):
     end_time = models.DateTimeField()
     state = models.CharField(max_length=100)
 
-    # Reference code fields — FKs added in task 3 when reference models exist
-    region_id = models.IntegerField(null=True, blank=True)
-    category_id = models.IntegerField(null=True, blank=True)
+    # Reference FKs — the CSV carries integer codes; unknown codes resolve to NULL.
+    region = models.ForeignKey(
+        Region, null=True, blank=True, on_delete=models.SET_NULL
+    )
+    category = models.ForeignKey(
+        Category, null=True, blank=True, on_delete=models.SET_NULL
+    )
+    # No reference model for offices/bailiffs yet — stays a plain code (see #18).
     office_id = models.CharField(max_length=50, blank=True)
 
     area = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
