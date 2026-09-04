@@ -32,7 +32,7 @@ class Listing(models.Model):
     # Source identifier — UUID from izsoles.csv (field name: id)
     source_id = models.UUIDField(unique=True)
 
-    title = models.CharField(max_length=500)
+    title = models.CharField(max_length=500, blank=True)
     initiated_by = models.CharField(max_length=20)  # "ZTI", "MPA", or "LegalPerson"
     bailiff = models.CharField(max_length=255, blank=True)
     start_time = models.DateTimeField()
