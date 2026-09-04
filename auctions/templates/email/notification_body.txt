@@ -1,0 +1,12 @@
+{% autoescape off %}Hi {{ recipient }},
+
+{{ count }} auction listing{{ count|pluralize }} matched your saved searches:
+
+{% for item in items %}* {{ item.title }}
+  Price: {{ item.price }}
+  Ends: {{ item.end_time }}
+  Link: {{ item.url }}
+  Matched: "{{ item.profile }}" ({{ item.alert_type }})
+{% if not forloop.last %}
+{% endif %}{% endfor %}
+{% endautoescape %}

@@ -10,8 +10,15 @@ against what is already in the database and against duplicates within the run
 itself.
 """
 
-from django.db import transaction
+import dataclasses
 
+from django.conf import settings
+from django.db import transaction
+from django.template.loader import render_to_string
+from django.utils import timezone
+
+from accounts.models import FilterProfile
+from auctions.email import get_backend
 from auctions.models import Notification
 
 
@@ -76,3 +83,146 @@ def queue_notifications(created, updated, matches):
     with transaction.atomic():
         Notification.objects.bulk_create(to_create)
     return to_create
+
+
+@dataclasses.dataclass(frozen=True)
+class DispatchResult:
+    """Outcome of one :func:`dispatch_pending` run.
+
+    ``emails`` is the number of emails attempted (one per batch); ``sent`` and
+    ``failed`` count *notification rows*, not emails.
+    """
+
+    emails: int
+    sent: int
+    failed: int
+
+
+def batch_notifications(notifications):
+    """Split pending notifications into per-email batches — the #14 seam.
+
+    Grouping, per recipient user:
+
+    * every row from a ``delivery="digest"`` profile collapses into **one**
+      batch for that user;
+    * every row whose ``filter_profile`` is ``NULL`` (the profile was deleted,
+      #13) is **treated as digest** and joins that same per-user batch — the
+      user still owns the row and should still hear about the listing;
+    * every ``delivery="immediate"`` profile gets **its own** batch (one per
+      profile).
+
+    Returns a list of lists — each inner list is the rows for one email — in
+    order of first appearance. Every profile is ``digest`` until #14 lands, so
+    today this is exactly one batch per user; #14 only flips the ``immediate``
+    branch, not the shape.
+    """
+    batches = {}
+    for note in notifications:
+        profile = note.filter_profile
+        if (
+            profile is not None
+            and profile.delivery == FilterProfile.Delivery.IMMEDIATE
+        ):
+            key = (note.user_id, profile.pk)
+        else:
+            key = (note.user_id, None)
+        batches.setdefault(key, []).append(note)
+    return list(batches.values())
+
+
+def _listing_url(listing):
+    return settings.LISTING_URL_TEMPLATE.format(source_id=listing.source_id)
+
+
+def _render_email(recipient, rows):
+    """Render the (subject, body) plain-text pair for one batch."""
+    items = [
+        {
+            "title": row.listing.title or "(untitled listing)",
+            "price": (
+                row.listing.start_price
+                if row.listing.start_price is not None
+                else "n/a"
+            ),
+            "end_time": row.listing.end_time,
+            "url": _listing_url(row.listing),
+            "profile": (
+                row.filter_profile.name
+                if row.filter_profile is not None
+                else "(deleted filter)"
+            ),
+            "alert_type": row.get_alert_type_display(),
+        }
+        for row in rows
+    ]
+    context = {
+        "recipient": recipient.get_full_name() or recipient.get_username(),
+        "count": len(items),
+        "items": items,
+    }
+    subject = render_to_string("email/notification_subject.txt", context).strip()
+    body = render_to_string("email/notification_body.txt", context)
+    return subject, body
+
+
+def _finish_batch(rows, status, *, sent_at=None, error=""):
+    """Flip one batch's rows to *status*, isolated in its own transaction."""
+    with transaction.atomic():
+        Notification.objects.filter(pk__in=[row.pk for row in rows]).update(
+            status=status, sent_at=sent_at, error=error
+        )
+
+
+#: Statuses :func:`dispatch_pending` picks up on each run. ``pending`` is a
+#: freshly queued row; ``failed`` is a row whose last send attempt errored —
+#: it is retried unconditionally (no attempt cap), so a transient provider
+#: outage clears itself the next run. ``sent`` rows are terminal and never
+#: re-selected, which is what makes an immediate re-run a no-op.
+DISPATCHABLE_STATUSES = (Notification.Status.PENDING, Notification.Status.FAILED)
+
+
+def dispatch_pending(backend=None):
+    """Send pending/failed notifications as email; return a :class:`DispatchResult`.
+
+    Selects rows whose ``status`` is in :data:`DISPATCHABLE_STATUSES`
+    (``pending`` or ``failed``), with ``select_related`` on user / filter
+    profile / listing, groups them into email batches with
+    :func:`batch_notifications`, and sends one email per batch through
+    *backend* (defaults to :func:`auctions.email.get_backend`, resolved up front
+    so a bad ``NOTIFICATION_BACKEND`` fails before any row is touched).
+
+    On a successful ``send()`` every row in that batch becomes ``sent`` with
+    ``sent_at`` set and ``error`` cleared. On failure the batch's rows become
+    ``failed`` with ``error`` set to the exception message, and the remaining
+    batches still go out. Each batch's DB update runs in its own transaction, so
+    one batch failing cannot corrupt another.
+
+    Re-running straight after a success does nothing — the rows are ``sent`` and
+    no longer selected. A ``failed`` row **is** re-selected on the next run, so
+    running again is the whole retry story.
+    """
+    if backend is None:
+        backend = get_backend()
+
+    pending = list(
+        Notification.objects.filter(status__in=DISPATCHABLE_STATUSES)
+        .select_related("user", "filter_profile", "listing")
+        .order_by("pk")
+    )
+
+    emails = sent = failed = 0
+    for rows in batch_notifications(pending):
+        emails += 1
+        recipient = rows[0].user
+        subject, body = _render_email(recipient, rows)
+        try:
+            backend.send(recipient.email, subject, body)
+        except Exception as exc:  # any backend failure fails just this batch
+            _finish_batch(rows, Notification.Status.FAILED, error=str(exc))
+            failed += len(rows)
+        else:
+            _finish_batch(
+                rows, Notification.Status.SENT, sent_at=timezone.now()
+            )
+            sent += len(rows)
+    return DispatchResult(emails=emails, sent=sent, failed=failed)

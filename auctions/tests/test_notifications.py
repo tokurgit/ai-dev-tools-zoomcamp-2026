@@ -4,12 +4,18 @@ import uuid
 from unittest import mock
 
 from django.db import IntegrityError, transaction
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from accounts.models import FilterProfile, User
 from auctions.models import Listing, Notification
-from auctions.notifications import queue_notifications
+from auctions.notifications import (
+    DispatchResult,
+    batch_notifications,
+    dispatch_pending,
+    queue_notifications,
+)
+from auctions.tests.support import RecordingBackend
 
 
 def _listing(**kwargs):
@@ -262,3 +268,229 @@ class NotificationModelTest(TestCase):
         row = self._row()
         row.listing.delete()
         self.assertFalse(Notification.objects.filter(pk=row.pk).exists())
+
+
+class DispatchPendingTest(TestCase):
+    """`dispatch_pending` + `batch_notifications` (#9)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.alice = User.objects.create_user(
+            "alice", email="alice@example.test", password="pw"
+        )
+        cls.bob = User.objects.create_user(
+            "bob", email="bob@example.test", password="pw"
+        )
+
+    def _profile(self, user, name, **kwargs):
+        return FilterProfile.objects.create(user=user, name=name, **kwargs)
+
+    def _pending(self, user, *, profile=None, listing=None,
+                 alert_type=Notification.AlertType.NEW, **listing_kwargs):
+        if profile is None:
+            profile = self._profile(user, f"profile-{Notification.objects.count()}")
+        if listing is None:
+            listing = _listing(**listing_kwargs)
+        return Notification.objects.create(
+            user=user,
+            filter_profile=profile,
+            listing=listing,
+            alert_type=alert_type,
+        )
+
+    # --- the issue's Tests section --------------------------------------
+
+    def test_all_digest_three_rows_two_users_two_emails_all_sent(self):
+        self._pending(self.alice)
+        self._pending(self.alice)
+        self._pending(self.bob)
+
+        backend = RecordingBackend()
+        result = dispatch_pending(backend)
+
+        self.assertEqual(len(backend.messages), 2)
+        self.assertEqual(
+            {m.to for m in backend.messages},
+            {"alice@example.test", "bob@example.test"},
+        )
+        self.assertEqual(result, DispatchResult(emails=2, sent=3, failed=0))
+        rows = Notification.objects.all()
+        self.assertEqual([r.status for r in rows], ["sent"] * 3)
+        self.assertTrue(all(r.sent_at is not None for r in rows))
+        self.assertTrue(all(r.error == "" for r in rows))
+
+    def test_one_failing_batch_does_not_stop_the_others(self):
+        self._pending(self.alice)
+        self._pending(self.bob)
+
+        backend = RecordingBackend(fail_for={"bob@example.test"})
+        result = dispatch_pending(backend)
+
+        self.assertEqual([m.to for m in backend.messages], ["alice@example.test"])
+        self.assertEqual(result, DispatchResult(emails=2, sent=1, failed=1))
+
+        alice_row = Notification.objects.get(user=self.alice)
+        self.assertEqual(alice_row.status, "sent")
+        self.assertIsNotNone(alice_row.sent_at)
+
+        bob_row = Notification.objects.get(user=self.bob)
+        self.assertEqual(bob_row.status, "failed")
+        self.assertIn("provider rejected bob@example.test", bob_row.error)
+        self.assertIsNone(bob_row.sent_at)
+
+    def test_one_user_two_profiles_yields_a_single_email_naming_both(self):
+        p1 = self._profile(self.alice, "Riga flats")
+        p2 = self._profile(self.alice, "Jurmala land")
+        self._pending(self.alice, profile=p1)
+        self._pending(self.alice, profile=p2, alert_type=Notification.AlertType.CHANGED)
+
+        backend = RecordingBackend()
+        dispatch_pending(backend)
+
+        self.assertEqual(len(backend.messages), 1)
+        body = backend.messages[0].body
+        self.assertIn("Riga flats", body)
+        self.assertIn("Jurmala land", body)
+        self.assertIn("(New)", body)
+        self.assertIn("(Changed)", body)
+
+    def test_rerun_after_success_sends_nothing(self):
+        self._pending(self.alice)
+        dispatch_pending(RecordingBackend())
+
+        backend = RecordingBackend()
+        result = dispatch_pending(backend)
+
+        self.assertEqual(backend.messages, [])
+        self.assertEqual(result, DispatchResult(emails=0, sent=0, failed=0))
+
+    def test_failed_row_is_reselected_and_cleared_on_the_next_run(self):
+        self._pending(self.alice)
+        dispatch_pending(RecordingBackend(fail_for={"alice@example.test"}))
+        self.assertEqual(Notification.objects.get().status, "failed")
+
+        backend = RecordingBackend()
+        dispatch_pending(backend)
+
+        self.assertEqual(len(backend.messages), 1)
+        row = Notification.objects.get()
+        self.assertEqual(row.status, "sent")
+        self.assertEqual(row.error, "")
+        self.assertIsNotNone(row.sent_at)
+
+    def test_uses_the_configured_backend_when_none_is_passed(self):
+        self._pending(self.alice)
+        with override_settings(
+            NOTIFICATION_BACKEND="auctions.tests.support.RecordingBackend"
+        ):
+            result = dispatch_pending()
+        self.assertEqual(result, DispatchResult(emails=1, sent=1, failed=0))
+        self.assertEqual(Notification.objects.get().status, "sent")
+
+    # --- batching seam (#14) ------------------------------------------
+
+    def test_each_immediate_profile_is_its_own_batch_digest_shares_one(self):
+        imm1 = self._profile(self.alice, "i1", delivery=FilterProfile.Delivery.IMMEDIATE)
+        imm2 = self._profile(self.alice, "i2", delivery=FilterProfile.Delivery.IMMEDIATE)
+        dig = self._profile(self.alice, "d", delivery=FilterProfile.Delivery.DIGEST)
+        self._pending(self.alice, profile=imm1)
+        self._pending(self.alice, profile=imm1)
+        self._pending(self.alice, profile=imm2)
+        self._pending(self.alice, profile=dig)
+
+        backend = RecordingBackend()
+        result = dispatch_pending(backend)
+
+        # imm1 batch + imm2 batch + one shared digest batch = 3 emails.
+        self.assertEqual(len(backend.messages), 3)
+        self.assertEqual(result, DispatchResult(emails=3, sent=4, failed=0))
+
+    def test_null_filter_profile_row_is_batched_as_digest_for_that_user(self):
+        doomed = self._profile(self.alice, "to-be-deleted")
+        keep = self._profile(self.alice, "kept")
+        orphan = self._pending(self.alice, profile=doomed)
+        self._pending(self.alice, profile=keep)
+        doomed.delete()
+        orphan.refresh_from_db()
+        self.assertIsNone(orphan.filter_profile)
+
+        backend = RecordingBackend()
+        dispatch_pending(backend)
+
+        self.assertEqual(len(backend.messages), 1)
+        self.assertIn("(deleted filter)", backend.messages[0].body)
+        self.assertEqual(Notification.objects.filter(status="sent").count(), 2)
+
+    def test_batch_notifications_groups_by_user_then_immediate_profile(self):
+        p_a = self._profile(self.alice, "a")
+        p_b_imm = self._profile(
+            self.bob, "b", delivery=FilterProfile.Delivery.IMMEDIATE
+        )
+        n1 = self._pending(self.alice, profile=p_a)
+        n2 = self._pending(self.bob, profile=p_b_imm)
+        n3 = self._pending(self.bob, profile=p_b_imm)
+
+        rows = list(
+            Notification.objects.select_related("user", "filter_profile").order_by("pk")
+        )
+        batches = batch_notifications(rows)
+
+        self.assertEqual([[n.pk for n in b] for b in batches], [[n1.pk], [n2.pk, n3.pk]])
+
+    def test_no_pending_rows_is_a_no_op(self):
+        self.assertEqual(batch_notifications([]), [])
+        result = dispatch_pending(RecordingBackend())
+        self.assertEqual(result, DispatchResult(emails=0, sent=0, failed=0))
+
+    # --- email body content -----------------------------------------
+
+    def test_body_lists_title_price_end_time_and_link_per_listing(self):
+        source_id = uuid.uuid4()
+        listing = _listing(
+            title="Skolas iela 1, Rīga",
+            start_price="12345.67",
+            source_id=source_id,
+            end_time=timezone.now().replace(year=2035),
+        )
+        self._pending(self.alice, listing=listing)
+
+        backend = RecordingBackend()
+        dispatch_pending(backend)
+
+        body = backend.messages[0].body
+        self.assertIn("Skolas iela 1, Rīga", body)
+        self.assertIn("12345.67", body)
+        self.assertIn("2035", body)
+        self.assertIn(
+            f"https://izsoles.ta.gov.lv/izsole/{source_id}", body
+        )
+
+    def test_body_handles_untitled_listing_and_missing_price(self):
+        listing = _listing(title="", start_price=None)
+        self._pending(self.alice, listing=listing)
+
+        backend = RecordingBackend()
+        dispatch_pending(backend)
+
+        body = backend.messages[0].body
+        self.assertIn("(untitled listing)", body)
+        self.assertIn("n/a", body)
+
+    def test_greeting_uses_full_name_when_the_user_has_one(self):
+        self.alice.first_name = "Alice"
+        self.alice.last_name = "Anderson"
+        self.alice.save()
+        self._pending(self.alice)
+
+        backend = RecordingBackend()
+        dispatch_pending(backend)
+
+        self.assertIn("Hi Alice Anderson,", backend.messages[0].body)
+
+    def test_greeting_falls_back_to_username(self):
+        self._pending(self.bob)
+
+        backend = RecordingBackend()
+        dispatch_pending(backend)
+
+        self.assertIn("Hi bob,", backend.messages[0].body)
