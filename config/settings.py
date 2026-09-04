@@ -128,14 +128,28 @@ USE_TZ = True
 STATIC_URL = 'static/'
 
 
-# Email
-# https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration
+# Notification email dispatch (issue #9)
+# --------------------------------------
+# ``auctions.notifications.dispatch_pending`` turns pending Notification rows
+# into email. The provider is swappable: NOTIFICATION_BACKEND is a dotted path
+# to a class in ``auctions.email`` implementing ``send(to, subject, body)``.
+# The console backend (the default) prints to stdout; ``ResendBackend`` POSTs to
+# the Resend HTTP API and needs RESEND_API_KEY / RESEND_FROM. Secrets come from
+# the environment, never the repo. (#22 will generalise env-driven settings;
+# these are added in the same os.environ style as the IZSOLES_* block below.)
+NOTIFICATION_BACKEND = os.environ.get(
+    'NOTIFICATION_BACKEND', 'auctions.email.ConsoleBackend'
+)
+RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '')
+RESEND_FROM = os.environ.get('RESEND_FROM', '')
 
-MAILERS = {
-    'default': {
-        'BACKEND': 'django.core.mail.backends.console.EmailBackend',
-    },
-}
+# Public URL of a single listing, used in notification emails. ``{source_id}``
+# is replaced with the listing's izsoles UUID. Default points at the live
+# izsoles detail page (``/izsole/<uuid>``); override once a local detail view
+# exists (#12).
+LISTING_URL_TEMPLATE = os.environ.get(
+    'LISTING_URL_TEMPLATE', 'https://izsoles.ta.gov.lv/izsole/{source_id}'
+)
 
 
 # izsoles.csv ingest (issue #4)
