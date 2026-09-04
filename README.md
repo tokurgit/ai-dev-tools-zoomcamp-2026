@@ -43,6 +43,26 @@ make load-reference-data     # load Category/Region lookups from data/*.csv
 make superuser               # create an admin login (optional)
 ```
 
+## Configuration (environment variables)
+
+Every environment-specific setting is read from the process environment
+(`config/settings.py`), with a safe default — a bare `git clone` + `uv sync`
+runs and passes `make test` with **no `.env` file at all**. See
+[`.env.example`](.env.example) for the full list.
+
+The one rule to know: `DJANGO_DEBUG` unset (or anything other than
+`1`/`true`/`yes`) means "nobody has configured this checkout" and every
+default stays dev-friendly. Setting `DJANGO_DEBUG=false` **explicitly**
+switches on production posture: `DJANGO_SECRET_KEY` becomes mandatory (raises
+`ImproperlyConfigured` at startup if missing), and secure cookies + an HTTPS
+redirect turn on (Nginx is expected to terminate TLS and forward
+`X-Forwarded-Proto`, see the planned deploy setup in **#16**).
+
+To use a local `.env` file: `cp .env.example .env`, edit it, then run with
+`uv run --env-file .env <command>` (e.g. `uv run --env-file .env python
+manage.py runserver`). Production uses systemd's `EnvironmentFile=`
+(`deploy/app.env`, **#16**) instead.
+
 ## Running the app
 
 ```bash

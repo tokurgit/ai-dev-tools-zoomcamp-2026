@@ -13,20 +13,82 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 import os
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
+# Environment-driven settings (issue #22)
+# ----------------------------------------
+# Every environment-specific value below comes from the process environment,
+# with a safe default for a totally unconfigured checkout. Local dev: copy
+# `.env.example` to `.env` and run `uv run --env-file .env <command>` (or set
+# nothing at all and get dev-friendly defaults). Production: `deploy/app.env`
+# (#16) via systemd `EnvironmentFile=`.
+def _env_bool(name, default=False):
+    """Read an env var as a bool: "1"/"true"/"yes" (case-insensitive) = True."""
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in ('1', 'true', 'yes')
+
+
+def _env_list(name, default=()):
+    """Read a comma-separated env var into a trimmed list; unset -> default."""
+    value = os.environ.get(name)
+    if value is None:
+        return list(default)
+    return [item.strip() for item in value.split(',') if item.strip()]
+
+
+# `DJANGO_DEBUG` absent entirely means "nobody has configured this checkout" —
+# keep every default permissive (dev-friendly), which is what lets `uv run
+# pytest` / CI and a bare `git clone` work with zero env vars, and is what the
+# issue's own Goal ("a fresh checkout runs locally with no env file") and its
+# "settings import with no env set" test both require. `DJANGO_DEBUG`
+# explicitly set (almost always to `false`, from `deploy/app.env`, #16) is
+# read as a deliberate declaration of a production-like environment, and is
+# what actually switches on the hardened posture below (mandatory
+# `SECRET_KEY`, secure cookies, SSL redirect) — not the bare `DEBUG` value by
+# itself. A literal "trigger on DEBUG == False" reading can't work: `DEBUG`
+# defaults to `False` per this same issue, so every test that doesn't pass
+# `secure=True` would start failing (`SECURE_SSL_REDIRECT`), and `uv run
+# pytest with no .env` would abort on the missing `SECRET_KEY` before a
+# single test ran. See the #22 issue comment for the full reasoning.
+_DEBUG_IS_CONFIGURED = 'DJANGO_DEBUG' in os.environ
+DEBUG = _env_bool('DJANGO_DEBUG', default=False)
+PRODUCTION = _DEBUG_IS_CONFIGURED and not DEBUG
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-qp8fzffn^p#8b1=#mw!cgfs^xwvvv1doe3*x2ufmz&71ib!sgm'
+SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY')
+if not SECRET_KEY:
+    if PRODUCTION:
+        raise ImproperlyConfigured(
+            'DJANGO_SECRET_KEY is required when DJANGO_DEBUG=false.'
+        )
+    # Fine for local dev/tests only — never reaches a deployment where
+    # DJANGO_DEBUG=false, which is enforced by the raise above.
+    SECRET_KEY = 'django-insecure-dev-only-qp8fzffn^p#8b1=#mw!cgfs^xwvvv1do'
 
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+ALLOWED_HOSTS = _env_list('DJANGO_ALLOWED_HOSTS')
+if not ALLOWED_HOSTS and DEBUG:
+    ALLOWED_HOSTS = ['localhost', '127.0.0.1']
 
-ALLOWED_HOSTS = []
+# The login form (and every POST) must work behind Nginx terminating TLS
+# (#16). Either set DJANGO_CSRF_TRUSTED_ORIGINS explicitly, or it is derived
+# from ALLOWED_HOSTS (each host prefixed https://).
+CSRF_TRUSTED_ORIGINS = _env_list('DJANGO_CSRF_TRUSTED_ORIGINS') or [
+    f'https://{host}' for host in ALLOWED_HOSTS
+]
+
+if PRODUCTION:
+    # Nginx terminates TLS and forwards the original scheme in this header
+    # (#16); trust it so Django knows the request was actually HTTPS.
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    SECURE_SSL_REDIRECT = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
 
 
 # Application definition
@@ -101,7 +163,7 @@ LOGOUT_REDIRECT_URL = 'login'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'NAME': os.environ.get('DJANGO_DB_PATH', str(BASE_DIR / 'db.sqlite3')),
     }
 }
 
