@@ -56,6 +56,11 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    # Login is enforced project-wide here (Django 5.1+). Every view requires an
+    # authenticated user unless decorated with ``login_not_required`` (only the
+    # login page is — see config/urls.py). This is the access gate #12–#14 rely
+    # on; see _docs/access-convention.md.
+    'django.contrib.auth.middleware.LoginRequiredMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
@@ -65,7 +70,7 @@ ROOT_URLCONF = 'config.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [BASE_DIR / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -78,6 +83,16 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'config.wsgi.application'
+
+
+# Authentication redirects (issue #11)
+# ------------------------------------
+# LOGIN_URL is where LoginRequiredMiddleware sends anonymous requests.
+# LOGIN_REDIRECT_URL is the post-login landing page (the home view at ``/``).
+# LOGOUT_REDIRECT_URL sends a logged-out user back to the login page.
+LOGIN_URL = 'login'
+LOGIN_REDIRECT_URL = 'home'
+LOGOUT_REDIRECT_URL = 'login'
 
 
 # Database

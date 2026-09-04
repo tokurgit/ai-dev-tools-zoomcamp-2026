@@ -16,5 +16,6 @@ Rules
 Documents
 
 - `_docs/process.md` - how work is organized
+- `_docs/access-convention.md` - login gating + per-user scoping every view must follow
 <!-- - Before writing tests, read `_docs/testing-guidelines.md`
 - For anything touching the UI, read `_docs/design-system.md` -->
